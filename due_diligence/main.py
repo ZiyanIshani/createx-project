@@ -27,6 +27,7 @@ from static_analysis.dep_graph import (
     build_dep_graph,
     compute_metrics,
 )
+from static_analysis.graph_viz import render_contributor_file_graph
 
 
 def _run_pipeline(repo_path: str, ref: str = "HEAD") -> dict:
@@ -60,6 +61,10 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD") -> dict:
         for path, emails in list(single_contributor_files.items())[:10]
     ]
 
+    # --- Generate contributor ↔ file graph image ---
+    images_dir = os.path.join(os.path.abspath(repo_path), "images")
+    graph_image_path = render_contributor_file_graph(bus_data, images_dir)
+
     # --- Step 2: Static Analysis ---
     graph = build_dep_graph(repo_path)
     metrics = compute_metrics(graph)
@@ -72,6 +77,7 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD") -> dict:
         "bus_factor_risk": bus_factor_risk,
         "dep_graph_metrics": metrics,
         "architectural_risk": arch_risk,
+        "contributor_file_graph": graph_image_path,
     }
 
 
@@ -147,6 +153,13 @@ def _print_pretty(result: dict) -> None:
     for reason in ar["reasons"]:
         print(f"    • {reason}")
     print()
+
+    # Graph image
+    if result.get("contributor_file_graph"):
+        print("CONTRIBUTOR ↔ FILE GRAPH")
+        print(sep)
+        print(f"  Saved to: {result['contributor_file_graph']}")
+        print()
 
 
 def main() -> None:
