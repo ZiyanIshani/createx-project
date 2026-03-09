@@ -89,9 +89,7 @@ def _collect_tree_paths(tree: pygit2.Tree, repo: pygit2.Repository, prefix: str 
     return paths
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+
 
 def discover_files(repo_path: str) -> List[str]:
     """

@@ -28,9 +28,6 @@ def _resolve_ref(repo: pygit2.Repository, ref: str) -> pygit2.Commit | None:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Existing function — unchanged, still exported
-# ---------------------------------------------------------------------------
 
 def commits_per_email(
     repo_path: str, ref: str = "HEAD"
@@ -58,10 +55,6 @@ def commits_per_email(
         reverse=True,
     )
 
-
-# ---------------------------------------------------------------------------
-# New functions
-# ---------------------------------------------------------------------------
 
 def contributor_timeline(
     repo_path: str, ref: str = "HEAD", bins: int | None = None
