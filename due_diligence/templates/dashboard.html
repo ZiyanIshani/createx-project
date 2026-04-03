@@ -273,7 +273,7 @@
       <div class="flex items-start justify-between gap-4 mb-1">
         <div>
           <div class="section-title" style="margin-bottom: 0.3rem;">Contributor ↔ File Ownership Graph</div>
-          <p class="section-desc" style="margin-bottom:0;">Blue circles = contributors, orange squares = files. Scroll to zoom, drag to pan, drag nodes to reposition.</p>
+          <p class="section-desc" style="margin-bottom:0;">Blue circles = contributors, orange squares = files. Scroll to zoom, drag to pan. Click any node to highlight its connections.</p>
         </div>
         <button onclick="fitGraph()" class="text-xs px-3 py-1 rounded-md border border-indigo-500 text-indigo-400 hover:bg-indigo-500 hover:text-white font-semibold transition-colors shrink-0">
           Fit to screen
@@ -438,6 +438,7 @@
             animate: false,
             idealEdgeLength: 120,
             nodeRepulsion: 8000,
+            nodeDimensionsIncludeLabels: true,
             padding: 40,
           },
           wheelSensitivity: 0.3,
