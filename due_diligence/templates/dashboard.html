@@ -110,27 +110,40 @@
 
       <!-- Top Contributors -->
       <div class="card p-6">
-        <div class="section-title">Top Contributors</div>
-        <p class="section-desc">Ranked by commit count. Status reflects how recently they last committed: <strong class="text-green-600">active</strong> = within 6 months, <strong class="text-orange-600">semi-active</strong> = 6–18 months, <strong class="text-gray-500">inactive</strong> = over 18 months ago.</p>
-        <table>
+        <div class="flex items-center justify-between mb-1">
+          <div class="section-title" style="margin-bottom:0;">Top Contributors</div>
+          <div class="flex gap-1" id="sort-toggle">
+            <button onclick="sortContributors('commits')" id="btn-commits"
+              class="text-xs px-3 py-1 rounded-md border border-indigo-500 bg-indigo-500 text-white font-semibold transition-colors">
+              By Commits
+            </button>
+            <button onclick="sortContributors('lines')" id="btn-lines"
+              class="text-xs px-3 py-1 rounded-md border border-indigo-500 text-indigo-400 font-semibold transition-colors hover:bg-indigo-500 hover:text-white">
+              By Lines Added
+            </button>
+          </div>
+        </div>
+        <p class="section-desc">Status reflects recency of last commit: <strong class="text-green-600">active</strong> = within 6 months, <strong class="text-orange-600">semi-active</strong> = 6–18 months, <strong class="text-gray-500">inactive</strong> = over 18 months ago.</p>
+        <table id="contributors-table">
           <thead>
             <tr>
               <th>Name</th>
-              <th>Commits</th>
+              <th id="th-commits" class="tabular-nums">Commits ↓</th>
+              <th id="th-lines" class="tabular-nums">Lines Added</th>
               <th>Status</th>
               <th>Email</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="contributors-body">
             {% for c in data.contributors %}
-            {% set recency = c.recency_score %}
-            <tr>
+            <tr data-commits="{{ c.commit_count }}" data-lines="{{ c.lines_added }}">
               <td class="font-medium text-white">{{ c.name }}</td>
               <td class="tabular-nums">{{ c.commit_count }}</td>
+              <td class="tabular-nums">{{ "{:,}".format(c.lines_added) }}</td>
               <td>
-                {% if recency == 1.0 %}
+                {% if c.recency_score == 1.0 %}
                 <span class="badge-active text-xs px-2 py-0.5 rounded-full font-semibold">active</span>
-                {% elif recency == 0.5 %}
+                {% elif c.recency_score == 0.5 %}
                 <span class="badge-semi text-xs px-2 py-0.5 rounded-full font-semibold">semi-active</span>
                 {% else %}
                 <span class="badge-inactive text-xs px-2 py-0.5 rounded-full font-semibold">inactive</span>
@@ -321,6 +334,18 @@
         }
       }
     });
+    function sortContributors(by) {
+      const tbody = document.getElementById('contributors-body');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort((a, b) => parseInt(b.dataset[by]) - parseInt(a.dataset[by]));
+      rows.forEach(r => tbody.appendChild(r));
+
+      const isCommits = by === 'commits';
+      document.getElementById('th-commits').textContent = isCommits ? 'Commits ↓' : 'Commits';
+      document.getElementById('th-lines').textContent = isCommits ? 'Lines Added' : 'Lines Added ↓';
+      document.getElementById('btn-commits').className = `text-xs px-3 py-1 rounded-md border border-indigo-500 font-semibold transition-colors ${isCommits ? 'bg-indigo-500 text-white' : 'text-indigo-400 hover:bg-indigo-500 hover:text-white'}`;
+      document.getElementById('btn-lines').className = `text-xs px-3 py-1 rounded-md border border-indigo-500 font-semibold transition-colors ${!isCommits ? 'bg-indigo-500 text-white' : 'text-indigo-400 hover:bg-indigo-500 hover:text-white'}`;
+    }
   </script>
 </body>
 </html>
