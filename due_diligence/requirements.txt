@@ -5,3 +5,4 @@ tree-sitter-languages>=1.10.0
 matplotlib>=3.7.0
 flask>=3.0
 pytest>=7.0.0
+openai>=1.0.0
