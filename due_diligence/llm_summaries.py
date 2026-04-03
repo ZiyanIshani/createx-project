@@ -306,5 +306,5 @@ def main() -> None:
     print(f"Wrote JSON summaries to: {args.json_out}")
     print(f"Wrote Markdown report to: {args.md_out}")
 
-    if __name__ == "main":
-        main()
+if __name__ == "__main__":
+    main()

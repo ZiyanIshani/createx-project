@@ -28,6 +28,10 @@
     .hub-bar-fill { height: 4px; background: #818cf8; border-radius: 2px; }
     .section-desc { font-size: 0.75rem; color: #4b5563; margin-top: -0.6rem; margin-bottom: 1rem; line-height: 1.4; }
     .metric-desc { font-size: 0.7rem; color: #4b5563; margin-top: 0.2rem; line-height: 1.3; }
+    details > summary { cursor: pointer; list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::before { content: "▸ "; font-size: 0.8em; }
+    details[open] > summary::before { content: "▾ "; }
   </style>
 </head>
 <body class="min-h-screen p-6">
@@ -69,8 +73,9 @@
     {% endif %}
 
     <!-- Metric cards -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
       {% set m = data.dep_graph_metrics %}
+      {% set tc = data.test_coverage %}
       <div class="card p-5" title="Files tracked by git in this repository.">
         <div class="metric-value text-indigo-400">{{ m.internal_file_count }}</div>
         <div class="metric-label">Internal files</div>
@@ -86,16 +91,54 @@
           {{ m.circular_dependency_groups|length }}
         </div>
         <div class="metric-label">Circular dep groups</div>
-        <div class="metric-desc">Import loops between files — hard to test and refactor</div>
+        <div class="metric-desc">Import loops between files</div>
       </div>
       <div class="card p-5" title="Files never imported by anything else. May be dead code, standalone scripts, or files with broken import paths.">
         <div class="metric-value {% if m.orphaned_files|length > 5 %}text-yellow-400{% else %}text-gray-300{% endif %}">
           {{ m.orphaned_files|length }}
         </div>
         <div class="metric-label">Orphaned files</div>
-        <div class="metric-desc">Files not imported by anything — possible dead code</div>
+        <div class="metric-desc">Not imported by anything</div>
+      </div>
+      <div class="card p-5" title="Number of test files detected via naming conventions (test_*, *_test, *.spec, etc).">
+        <div class="metric-value text-cyan-400">{{ tc.test_file_count }}</div>
+        <div class="metric-label">Test files</div>
+        <div class="metric-desc">Ratio: {{ tc.test_to_source_ratio }} test:source</div>
+      </div>
+      <div class="card p-5" title="Percentage of source files directly imported by at least one test file.">
+        <div class="metric-value {% if tc.coverage_percent >= 50 %}text-green-400{% elif tc.coverage_percent >= 20 %}text-yellow-400{% else %}text-red-400{% endif %}">
+          {{ tc.coverage_percent }}%
+        </div>
+        <div class="metric-label">Test coverage est.</div>
+        <div class="metric-desc">Source files imported by tests</div>
       </div>
     </div>
+
+    <!-- Commit Velocity -->
+    {% if data.commit_velocity and data.commit_velocity.months %}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div class="card p-6">
+        <div class="section-title">Commit Frequency</div>
+        <p class="section-desc">
+          Commits per month from {{ data.commit_velocity.first_commit_date }} to {{ data.commit_velocity.last_commit_date }}.
+          Total: <strong class="text-white">{{ data.commit_velocity.total_commits }}</strong> commits.
+        </p>
+        <div style="position: relative; height: 220px;">
+          <canvas id="velocityChart"></canvas>
+        </div>
+      </div>
+      <div class="card p-6">
+        <div class="section-title">Code Churn</div>
+        <p class="section-desc">
+          Lines added <span class="text-green-400">(green)</span> and removed <span class="text-red-400">(red)</span> per month.
+          Large spikes may indicate rewrites or major refactors.
+        </p>
+        <div style="position: relative; height: 220px;">
+          <canvas id="churnChart"></canvas>
+        </div>
+      </div>
+    </div>
+    {% endif %}
 
     <!-- Row: Language + Contributors -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -144,8 +187,33 @@
       </div>
     </div>
 
-    <!-- Row: Bus Factor + Fragile Hubs -->
+    <!-- Row: Test Coverage Detail + Bus Factor -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+
+      <!-- Test Coverage Detail -->
+      <div class="card p-6">
+        <div class="section-title">Test Coverage Detail</div>
+        <p class="section-desc">Source files not directly imported by any test file. These modules have <em>zero</em> direct test coverage and represent blind spots in the test suite.</p>
+        {% if tc.untested_files %}
+        <table style="table-layout: fixed;">
+          <thead>
+            <tr><th>Untested Source File</th></tr>
+          </thead>
+          <tbody>
+            {% for f in tc.untested_files %}
+            <tr>
+              <td class="font-mono text-xs text-red-300" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ f }}">{{ f }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if tc.untested_files|length >= 20 %}
+        <p class="text-xs text-gray-500 mt-2">Showing first 20 of {{ tc.source_file_count - tc.tested_files|length }} untested files.</p>
+        {% endif %}
+        {% else %}
+        <p class="text-sm text-green-400">All source files have at least one test importing them.</p>
+        {% endif %}
+      </div>
 
       <!-- Bus Factor Risk -->
       <div class="card p-6">
@@ -172,6 +240,10 @@
         <p class="text-sm text-green-400">No bus factor risk detected.</p>
         {% endif %}
       </div>
+    </div>
+
+    <!-- Row: Fragile Hubs + External Deps -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
       <!-- Fragile Hubs -->
       <div class="card p-6">
@@ -197,10 +269,6 @@
         <p class="text-sm text-gray-500">No fragile hubs detected.</p>
         {% endif %}
       </div>
-    </div>
-
-    <!-- Row: External Deps chart + Graph image -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 
       <!-- External Dependencies -->
       <div class="card p-6">
@@ -210,8 +278,10 @@
           <canvas id="depsChart"></canvas>
         </div>
       </div>
+    </div>
 
-      <!-- Dep graph stats -->
+    <!-- Dep graph stats -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
       <div class="card p-6">
         <div class="section-title">Dependency Graph Stats</div>
         <p class="section-desc">How files in the codebase connect to each other through imports.</p>
@@ -250,7 +320,81 @@
         </div>
         {% endif %}
       </div>
+
+      <!-- Test files list (collapsible) -->
+      <div class="card p-6">
+        <div class="section-title">Detected Test Files</div>
+        <p class="section-desc">Files identified as tests via naming conventions (test_*, *_test, *.spec, conftest, etc.) and directory placement (tests/, __tests__/).</p>
+        {% if tc.test_files %}
+        <details>
+          <summary class="text-xs text-indigo-400 font-semibold mb-2">{{ tc.test_file_count }} test file{{ "s" if tc.test_file_count != 1 }} detected</summary>
+          <div class="mt-2 max-h-48 overflow-y-auto">
+            {% for f in tc.test_files %}
+            <div class="text-xs font-mono text-gray-400 py-0.5">{{ f }}</div>
+            {% endfor %}
+          </div>
+        </details>
+        {% else %}
+        <p class="text-sm text-yellow-400">No test files detected.</p>
+        {% endif %}
+      </div>
     </div>
+
+    <!-- LLM Summaries (only if available) -->
+    {% if data.llm_summaries %}
+    <div class="card p-6 mb-6">
+      <div class="section-title">AI File Summaries</div>
+      <p class="section-desc">LLM-generated summaries for the most central internal files (highest in-degree). These are the files that would cause the most damage if modified incorrectly.</p>
+      <div class="space-y-4">
+        {% for s in data.llm_summaries %}
+        <details class="bg-[#141620] border border-[#2d3148] rounded-lg">
+          <summary class="p-4 flex justify-between items-center">
+            <span class="font-mono text-sm text-indigo-300">{{ s.file }}</span>
+            <div class="flex items-center gap-3">
+              {% if s._metrics %}
+              <span class="text-xs text-gray-500">in-degree: {{ s._metrics.in_degree }}</span>
+              {% endif %}
+              <span class="text-xs px-2 py-0.5 rounded-full
+                {% if s.confidence == 'high' %}bg-green-900/40 text-green-400 border border-green-700/40
+                {% elif s.confidence == 'medium' %}bg-yellow-900/40 text-yellow-400 border border-yellow-700/40
+                {% else %}bg-red-900/40 text-red-400 border border-red-700/40{% endif %}">
+                {{ s.confidence }} confidence
+              </span>
+            </div>
+          </summary>
+          <div class="px-4 pb-4 space-y-3">
+            <div>
+              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Role</div>
+              <p class="text-sm text-gray-300">{{ s.role }}</p>
+            </div>
+            {% if s.key_responsibilities %}
+            <div>
+              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Key Responsibilities</div>
+              <ul class="text-sm text-gray-400 list-disc list-inside">
+                {% for r in s.key_responsibilities %}<li>{{ r }}</li>{% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if s.why_central %}
+            <div>
+              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Why Central</div>
+              <p class="text-sm text-gray-400">{{ s.why_central }}</p>
+            </div>
+            {% endif %}
+            {% if s.risk_notes %}
+            <div>
+              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Risk Notes</div>
+              <ul class="text-sm text-orange-300/80 list-disc list-inside">
+                {% for r in s.risk_notes %}<li>{{ r }}</li>{% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+          </div>
+        </details>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
 
     <!-- Contributor ↔ File Graph image -->
     <div class="card p-6 mb-6">
@@ -264,7 +408,12 @@
   </div>
 
   <script>
-    // Language chart — filter out "Unknown" (unrecognized extensions like .pyc, .DS_Store)
+    const chartGridColor = '#2d3148';
+    const chartTickColor = '#6b7280';
+    const chartLabelColor = '#cbd5e1';
+    const chartFont = { size: 11 };
+
+    // ── Language chart ──
     const langData = {{ data.languages.summary | tojson }};
     delete langData['Unknown'];
     const langLabels = Object.keys(langData).sort((a, b) => langData[b] - langData[a]);
@@ -288,13 +437,13 @@
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { grid: { color: '#2d3148' }, ticks: { color: '#6b7280', font: { size: 11 } } },
-          y: { grid: { display: false }, ticks: { color: '#cbd5e1', font: { size: 11 } } }
+          x: { grid: { color: chartGridColor }, ticks: { color: chartTickColor, font: chartFont } },
+          y: { grid: { display: false }, ticks: { color: chartLabelColor, font: chartFont } }
         }
       }
     });
 
-    // External deps chart
+    // ── External deps chart ──
     const depsRaw = {{ data.dep_graph_metrics.top_external_deps | tojson }};
     const depsLabels = depsRaw.map(d => d.package);
     const depsValues = depsRaw.map(d => d.import_count);
@@ -316,11 +465,120 @@
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { grid: { color: '#2d3148' }, ticks: { color: '#6b7280', font: { size: 11 } } },
-          y: { grid: { display: false }, ticks: { color: '#cbd5e1', font: { size: 11 } } }
+          x: { grid: { color: chartGridColor }, ticks: { color: chartTickColor, font: chartFont } },
+          y: { grid: { display: false }, ticks: { color: chartLabelColor, font: chartFont } }
         }
       }
     });
+
+    // ── Commit velocity chart ──
+    {% if data.commit_velocity and data.commit_velocity.months %}
+    const velMonths = {{ data.commit_velocity.months | tojson }};
+    const velCommits = {{ data.commit_velocity.commits_per_month | tojson }};
+
+    new Chart(document.getElementById('velocityChart'), {
+      type: 'bar',
+      data: {
+        labels: velMonths,
+        datasets: [{
+          label: 'Commits',
+          data: velCommits,
+          backgroundColor: '#818cf8',
+          borderRadius: 4,
+          borderSkipped: false,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            grid: { color: chartGridColor },
+            ticks: {
+              color: chartTickColor,
+              font: chartFont,
+              maxRotation: 45,
+              autoSkip: true,
+              maxTicksLimit: 18,
+            }
+          },
+          y: {
+            grid: { color: chartGridColor },
+            ticks: { color: chartTickColor, font: chartFont },
+            beginAtZero: true,
+          }
+        }
+      }
+    });
+
+    // ── Code churn chart ──
+    const churnAdded = {{ data.commit_velocity.lines_added_per_month | tojson }};
+    const churnRemoved = {{ data.commit_velocity.lines_removed_per_month | tojson }};
+
+    new Chart(document.getElementById('churnChart'), {
+      type: 'bar',
+      data: {
+        labels: velMonths,
+        datasets: [
+          {
+            label: 'Lines added',
+            data: churnAdded,
+            backgroundColor: 'rgba(74, 222, 128, 0.7)',
+            borderRadius: 3,
+            borderSkipped: false,
+          },
+          {
+            label: 'Lines removed',
+            data: churnRemoved.map(v => -v),
+            backgroundColor: 'rgba(248, 113, 113, 0.7)',
+            borderRadius: 3,
+            borderSkipped: false,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            labels: { color: chartTickColor, font: chartFont, boxWidth: 12 },
+          },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const v = Math.abs(ctx.raw);
+                return ctx.dataset.label + ': ' + v.toLocaleString();
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            stacked: true,
+            grid: { color: chartGridColor },
+            ticks: {
+              color: chartTickColor,
+              font: chartFont,
+              maxRotation: 45,
+              autoSkip: true,
+              maxTicksLimit: 18,
+            }
+          },
+          y: {
+            stacked: true,
+            grid: { color: chartGridColor },
+            ticks: {
+              color: chartTickColor,
+              font: chartFont,
+              callback: function(v) { return Math.abs(v).toLocaleString(); }
+            },
+          }
+        }
+      }
+    });
+    {% endif %}
   </script>
 </body>
 </html>
