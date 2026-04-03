@@ -6,6 +6,7 @@
   <title>Due Diligence Report</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
   <style>
     body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
     .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 12px; }
@@ -110,27 +111,42 @@
 
       <!-- Top Contributors -->
       <div class="card p-6">
-        <div class="section-title">Top Contributors</div>
-        <p class="section-desc">Ranked by commit count. Status reflects how recently they last committed: <strong class="text-green-600">active</strong> = within 6 months, <strong class="text-orange-600">semi-active</strong> = 6–18 months, <strong class="text-gray-500">inactive</strong> = over 18 months ago.</p>
-        <table>
+        <div class="flex items-start justify-between gap-4 mb-3">
+          <div>
+            <div class="section-title" style="margin-bottom: 0.3rem;">Top Contributors</div>
+            <p class="section-desc" style="margin-bottom:0;">Status reflects recency of last commit: <strong class="text-green-600">active</strong> = within 6 months, <strong class="text-orange-600">semi-active</strong> = 6–18 months, <strong class="text-gray-500">inactive</strong> = over 18 months ago.</p>
+          </div>
+          <div class="flex gap-1 shrink-0" id="sort-toggle">
+            <button onclick="sortContributors('commits')" id="btn-commits"
+              class="text-xs px-3 py-1 rounded-md border border-indigo-500 bg-indigo-500 text-white font-semibold transition-colors">
+              By Commits
+            </button>
+            <button onclick="sortContributors('lines')" id="btn-lines"
+              class="text-xs px-3 py-1 rounded-md border border-indigo-500 text-indigo-400 font-semibold transition-colors hover:bg-indigo-500 hover:text-white">
+              By Lines Added
+            </button>
+          </div>
+        </div>
+        <table id="contributors-table">
           <thead>
             <tr>
               <th>Name</th>
-              <th>Commits</th>
+              <th id="th-commits" class="tabular-nums">Commits ↓</th>
+              <th id="th-lines" class="tabular-nums">Lines Added</th>
               <th>Status</th>
               <th>Email</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="contributors-body">
             {% for c in data.contributors %}
-            {% set recency = c.recency_score %}
-            <tr>
+            <tr data-commits="{{ c.commit_count }}" data-lines="{{ c.lines_added }}">
               <td class="font-medium text-white">{{ c.name }}</td>
               <td class="tabular-nums">{{ c.commit_count }}</td>
+              <td class="tabular-nums">{{ "{:,}".format(c.lines_added) }}</td>
               <td>
-                {% if recency == 1.0 %}
+                {% if c.recency_score == 1.0 %}
                 <span class="badge-active text-xs px-2 py-0.5 rounded-full font-semibold">active</span>
-                {% elif recency == 0.5 %}
+                {% elif c.recency_score == 0.5 %}
                 <span class="badge-semi text-xs px-2 py-0.5 rounded-full font-semibold">semi-active</span>
                 {% else %}
                 <span class="badge-inactive text-xs px-2 py-0.5 rounded-full font-semibold">inactive</span>
@@ -252,13 +268,32 @@
       </div>
     </div>
 
-    <!-- Contributor ↔ File Graph image -->
+    <!-- Contributor ↔ File Graph (interactive) -->
     <div class="card p-6 mb-6">
-      <div class="section-title">Contributor ↔ File Ownership Graph</div>
-      <p class="section-desc">Bipartite graph showing which contributors have touched which files. Blue circles = contributors, orange squares = files. Densely connected contributors are generalists; files connected to only one contributor are bus-factor risks.</p>
-      <div class="flex justify-center">
-        <img src="/graph-image" alt="Contributor file graph" class="rounded-lg max-w-full" style="max-height: 600px;" onerror="this.parentElement.innerHTML='<p class=\'text-sm text-gray-500\'>Graph image not available.</p>'" />
+      <div class="flex items-start justify-between gap-4 mb-1">
+        <div>
+          <div class="section-title" style="margin-bottom: 0.3rem;">Contributor ↔ File Ownership Graph</div>
+          <p class="section-desc" style="margin-bottom:0;">Blue circles = contributors, orange squares = files. Scroll to zoom, drag to pan. Click any node to highlight its connections.</p>
+        </div>
+        <button onclick="fitGraph()" class="text-xs px-3 py-1 rounded-md border border-indigo-500 text-indigo-400 hover:bg-indigo-500 hover:text-white font-semibold transition-colors shrink-0">
+          Fit to screen
+        </button>
       </div>
+
+      <!-- Legend -->
+      <div class="flex gap-4 mb-3 mt-3">
+        <div class="flex items-center gap-1.5 text-xs text-gray-400">
+          <div style="width:12px;height:12px;border-radius:50%;background:#4A90D9;"></div> Contributor
+        </div>
+        <div class="flex items-center gap-1.5 text-xs text-gray-400">
+          <div style="width:12px;height:12px;background:#E8913A;"></div> File
+        </div>
+      </div>
+
+      <div id="cy" style="width:100%;height:520px;background:#0f1117;border-radius:8px;"></div>
+
+      <!-- Hover tooltip -->
+      <div id="cy-tooltip" style="position:fixed;background:#1a1d27;border:1px solid #2d3148;color:#e2e8f0;font-size:0.75rem;padding:6px 10px;border-radius:6px;pointer-events:none;display:none;max-width:320px;word-break:break-all;font-family:monospace;z-index:1000;"></div>
     </div>
 
   </div>
@@ -321,6 +356,134 @@
         }
       }
     });
+    // Interactive contributor graph
+    let cy;
+
+    function fitGraph() {
+      if (cy) cy.fit(undefined, 40);
+    }
+
+    fetch('/graph-data')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.nodes.length) {
+          document.getElementById('cy').innerHTML = '<p style="color:#6b7280;padding:2rem;text-align:center;">No graph data available.</p>';
+          return;
+        }
+
+        cy = cytoscape({
+          container: document.getElementById('cy'),
+          elements: [...data.nodes, ...data.edges],
+          style: [
+            {
+              selector: 'node[kind="person"]',
+              style: {
+                'background-color': '#4A90D9',
+                'label': 'data(label)',
+                'color': '#e2e8f0',
+                'font-size': '11px',
+                'font-weight': 'bold',
+                'text-valign': 'bottom',
+                'text-margin-y': '4px',
+                'width': '36px',
+                'height': '36px',
+                'text-outline-color': '#0f1117',
+                'text-outline-width': '2px',
+              }
+            },
+            {
+              selector: 'node[kind="file"]',
+              style: {
+                'background-color': '#E8913A',
+                'shape': 'rectangle',
+                'label': 'data(label)',
+                'color': '#e2e8f0',
+                'font-size': '9px',
+                'text-valign': 'bottom',
+                'text-margin-y': '4px',
+                'width': '24px',
+                'height': '24px',
+                'text-outline-color': '#0f1117',
+                'text-outline-width': '2px',
+              }
+            },
+            {
+              selector: 'edge',
+              style: {
+                'line-color': '#a0aec0',
+                'opacity': 0.5,
+                'width': 1.2,
+                'curve-style': 'bezier',
+              }
+            },
+            {
+              selector: 'node:selected',
+              style: { 'border-width': '2px', 'border-color': '#818cf8' }
+            },
+            {
+              selector: 'node.highlighted',
+              style: { 'border-width': '2px', 'border-color': '#fbbf24', 'opacity': 1 }
+            },
+            {
+              selector: 'node.faded',
+              style: { 'opacity': 0.2 }
+            },
+            {
+              selector: 'edge.faded',
+              style: { 'opacity': 0.05 }
+            },
+          ],
+          layout: {
+            name: 'cose',
+            animate: false,
+            idealEdgeLength: 120,
+            nodeRepulsion: 8000,
+            nodeDimensionsIncludeLabels: true,
+            padding: 40,
+          },
+          wheelSensitivity: 0.3,
+          minZoom: 0.1,
+          maxZoom: 4,
+        });
+
+        // Hover tooltip
+        const tooltip = document.getElementById('cy-tooltip');
+        cy.on('mouseover', 'node', e => {
+          const node = e.target;
+          tooltip.textContent = node.data('full_path');
+          tooltip.style.display = 'block';
+        });
+        cy.on('mousemove', e => {
+          tooltip.style.left = (e.originalEvent.clientX + 12) + 'px';
+          tooltip.style.top  = (e.originalEvent.clientY + 12) + 'px';
+        });
+        cy.on('mouseout', 'node', () => { tooltip.style.display = 'none'; });
+
+        // Highlight connected nodes on click
+        cy.on('tap', 'node', e => {
+          const node = e.target;
+          cy.elements().removeClass('highlighted faded');
+          const connected = node.closedNeighborhood();
+          cy.elements().not(connected).addClass('faded');
+          connected.addClass('highlighted');
+        });
+        cy.on('tap', e => {
+          if (e.target === cy) cy.elements().removeClass('highlighted faded');
+        });
+      });
+
+    function sortContributors(by) {
+      const tbody = document.getElementById('contributors-body');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort((a, b) => parseInt(b.dataset[by]) - parseInt(a.dataset[by]));
+      rows.forEach(r => tbody.appendChild(r));
+
+      const isCommits = by === 'commits';
+      document.getElementById('th-commits').textContent = isCommits ? 'Commits ↓' : 'Commits';
+      document.getElementById('th-lines').textContent = isCommits ? 'Lines Added' : 'Lines Added ↓';
+      document.getElementById('btn-commits').className = `text-xs px-3 py-1 rounded-md border border-indigo-500 font-semibold transition-colors ${isCommits ? 'bg-indigo-500 text-white' : 'text-indigo-400 hover:bg-indigo-500 hover:text-white'}`;
+      document.getElementById('btn-lines').className = `text-xs px-3 py-1 rounded-md border border-indigo-500 font-semibold transition-colors ${!isCommits ? 'bg-indigo-500 text-white' : 'text-indigo-400 hover:bg-indigo-500 hover:text-white'}`;
+    }
   </script>
 </body>
 </html>
