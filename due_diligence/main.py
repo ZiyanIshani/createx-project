@@ -78,6 +78,7 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD") -> dict:
         "languages": languages,
         "contributors": top_contributors,
         "bus_factor_risk": bus_factor_risk,
+        "bus_data": bus_data,
         "dep_graph_metrics": metrics,
         "architectural_risk": arch_risk,
         "contributor_file_graph": graph_image_path,
