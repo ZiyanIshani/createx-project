@@ -76,16 +76,50 @@ def _resolve_head(repo: pygit2.Repository) -> pygit2.Commit | None:
         return None
 
 
+# Directories and file extensions that are never meaningful source files.
+# Filtered at discovery time so nothing downstream ever sees them.
+_IGNORE_DIRS: frozenset[str] = frozenset({
+    "__pycache__", ".git", "node_modules", ".venv", "venv",
+    "env", ".env", "dist", "build", ".mypy_cache", ".pytest_cache",
+    ".tox", ".eggs", "*.egg-info",
+})
+
+_IGNORE_EXTENSIONS: frozenset[str] = frozenset({
+    ".pyc", ".pyo", ".pyd",          # Python bytecode
+    ".class",                          # Java bytecode
+    ".o", ".a", ".so", ".dylib",      # compiled objects / native libs
+    ".exe", ".dll",                    # Windows binaries
+    ".DS_Store",                       # macOS metadata
+})
+
+_IGNORE_FILENAMES: frozenset[str] = frozenset({
+    ".DS_Store", "Thumbs.db", ".gitkeep",
+})
+
+
+def is_noise(entry_name: str, is_tree: bool) -> bool:
+    """Return True if this entry should be excluded from analysis.
+
+    Public so other modules (e.g. git_stats) can reuse the same filter.
+    """
+    if is_tree:
+        return entry_name in _IGNORE_DIRS
+    _, ext = os.path.splitext(entry_name)
+    return ext.lower() in _IGNORE_EXTENSIONS or entry_name in _IGNORE_FILENAMES
+
+
 def _collect_tree_paths(tree: pygit2.Tree, repo: pygit2.Repository, prefix: str = "") -> List[str]:
-    """Recursively collect blob paths from a tree."""
+    """Recursively collect blob paths from a tree, skipping noise files."""
     paths: List[str] = []
     for entry in tree:
-        entry_path = f"{prefix}{entry.name}" if not prefix else f"{prefix}/{entry.name}"
+        entry_path = f"{entry.name}" if not prefix else f"{prefix}/{entry.name}"
         obj = repo.get(entry.id)
         if isinstance(obj, pygit2.Tree):
-            paths.extend(_collect_tree_paths(obj, repo, entry_path))
+            if not is_noise(entry.name, is_tree=True):
+                paths.extend(_collect_tree_paths(obj, repo, entry_path))
         elif isinstance(obj, pygit2.Blob):
-            paths.append(entry_path)
+            if not is_noise(entry.name, is_tree=False):
+                paths.append(entry_path)
     return paths
 
 

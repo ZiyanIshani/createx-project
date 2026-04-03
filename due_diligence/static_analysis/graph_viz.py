@@ -87,7 +87,7 @@ def render_contributor_file_graph(
     fig, ax = plt.subplots(figsize=(fig_size, fig_size * 0.7))
 
     # Draw edges
-    nx.draw_networkx_edges(g, pos, ax=ax, alpha=0.3, edge_color="#999999", width=0.8)
+    nx.draw_networkx_edges(g, pos, ax=ax, alpha=0.7, edge_color="#a0aec0", width=1.5)
 
     # Draw person nodes
     nx.draw_networkx_nodes(

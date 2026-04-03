@@ -10,6 +10,8 @@ from typing import Dict, List, Tuple
 
 import pygit2
 
+from repo_ingestion.file_tree import is_noise
+
 
 def _open_repo(repo_path: str) -> pygit2.Repository | None:
     try:
@@ -108,8 +110,11 @@ def bus_factor_data(
             path = f"{prefix}{entry.name}" if not prefix else f"{prefix}/{entry.name}"
             obj = repo.get(entry.id)
             if isinstance(obj, pygit2.Tree):
-                _walk_tree(obj, path)
+                if not is_noise(entry.name, is_tree=True):
+                    _walk_tree(obj, path)
             elif isinstance(obj, pygit2.Blob):
+                if is_noise(entry.name, is_tree=False):
+                    continue
                 try:
                     blame = repo.blame(path, newest_commit=head.id)
                     emails = {
