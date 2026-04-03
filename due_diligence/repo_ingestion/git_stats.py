@@ -58,6 +58,33 @@ def commits_per_email(
     )
 
 
+def lines_per_contributor(
+    repo_path: str, ref: str = "HEAD"
+) -> Dict[str, int]:
+    """
+    Return {email: lines_added} by summing diff insertions across all
+    non-merge commits. Merge commits are skipped to avoid double-counting.
+    """
+    repo = _open_repo(repo_path)
+    if repo is None:
+        return {}
+
+    head = _resolve_ref(repo, ref)
+    if head is None:
+        return {}
+
+    totals: Dict[str, int] = defaultdict(int)
+
+    for commit in repo.walk(head.id, pygit2.GIT_SORT_TOPOLOGICAL):
+        if len(commit.parents) != 1:
+            continue
+        email = commit.author.email
+        diff = repo.diff(commit.parents[0], commit)
+        totals[email] += diff.stats.insertions
+
+    return dict(totals)
+
+
 def contributor_timeline(
     repo_path: str, ref: str = "HEAD", bins: int | None = None
 ) -> Dict[str, Dict[str, int]]:
