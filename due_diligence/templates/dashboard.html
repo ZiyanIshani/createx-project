@@ -110,9 +110,12 @@
 
       <!-- Top Contributors -->
       <div class="card p-6">
-        <div class="flex items-center justify-between mb-1">
-          <div class="section-title" style="margin-bottom:0;">Top Contributors</div>
-          <div class="flex gap-1" id="sort-toggle">
+        <div class="flex items-start justify-between gap-4 mb-3">
+          <div>
+            <div class="section-title" style="margin-bottom: 0.3rem;">Top Contributors</div>
+            <p class="section-desc" style="margin-bottom:0;">Status reflects recency of last commit: <strong class="text-green-600">active</strong> = within 6 months, <strong class="text-orange-600">semi-active</strong> = 6–18 months, <strong class="text-gray-500">inactive</strong> = over 18 months ago.</p>
+          </div>
+          <div class="flex gap-1 shrink-0" id="sort-toggle">
             <button onclick="sortContributors('commits')" id="btn-commits"
               class="text-xs px-3 py-1 rounded-md border border-indigo-500 bg-indigo-500 text-white font-semibold transition-colors">
               By Commits
@@ -123,7 +126,6 @@
             </button>
           </div>
         </div>
-        <p class="section-desc">Status reflects recency of last commit: <strong class="text-green-600">active</strong> = within 6 months, <strong class="text-orange-600">semi-active</strong> = 6–18 months, <strong class="text-gray-500">inactive</strong> = over 18 months ago.</p>
         <table id="contributors-table">
           <thead>
             <tr>
