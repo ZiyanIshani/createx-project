@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from flask import Flask, render_template, send_file, abort
+from flask import Flask, render_template, send_file, abort, jsonify
 
 from main import _run_pipeline
 
@@ -57,6 +57,39 @@ def dashboard():
     if _result is None:
         _result = _run_pipeline(_repo_path, ref=_ref, use_llm=_use_llm)
     return render_template("dashboard.html", data=_result, repo_name=_repo_name, repo_url=_repo_url)
+
+
+@app.route("/graph-data")
+def graph_data():
+    global _result
+    if _result is None:
+        _result = _run_pipeline(_repo_path, ref=_ref)
+    bus_data = _result.get("bus_data", {})
+
+    nodes, edges = [], []
+    seen_nodes = set()
+
+    for file_path, emails in bus_data.items():
+        if file_path not in seen_nodes:
+            nodes.append({"data": {
+                "id": file_path,
+                "label": file_path.split("/")[-1],
+                "full_path": file_path,
+                "kind": "file",
+            }})
+            seen_nodes.add(file_path)
+        for email in emails:
+            if email not in seen_nodes:
+                nodes.append({"data": {
+                    "id": email,
+                    "label": email.split("@")[0],
+                    "full_path": email,
+                    "kind": "person",
+                }})
+                seen_nodes.add(email)
+            edges.append({"data": {"source": email, "target": file_path}})
+
+    return jsonify({"nodes": nodes, "edges": edges})
 
 
 @app.route("/graph-image")

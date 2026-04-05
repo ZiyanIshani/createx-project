@@ -22,6 +22,7 @@ from repo_ingestion.git_stats import (
     commit_velocity,
     commits_per_email,
     contributor_recency_score,
+    lines_per_contributor,
 )
 from static_analysis.dep_graph import (
     architectural_risk_score,
@@ -38,6 +39,7 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> d
 
     raw_contributors = commits_per_email(repo_path, ref=ref)
     augmented = contributor_recency_score(raw_contributors, repo_path=repo_path, ref=ref)
+    lines_by_email = lines_per_contributor(repo_path, ref=ref)
 
     top_contributors = [
         {
@@ -46,6 +48,7 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> d
             "email": email,
             "last_commit_ts": last_ts,
             "recency_score": recency,
+            "lines_added": lines_by_email.get(email, 0),
         }
         for count, name, email, last_ts, recency in augmented[:10]
     ]
@@ -93,6 +96,7 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> d
         "contributors": top_contributors,
         "bus_factor_risk": bus_factor_risk,
         "commit_velocity": velocity,
+        "bus_data": bus_data,
         "dep_graph_metrics": metrics,
         "architectural_risk": arch_risk,
         "test_coverage": test_cov,
