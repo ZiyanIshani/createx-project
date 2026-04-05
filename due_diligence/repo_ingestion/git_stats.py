@@ -13,6 +13,21 @@ import pygit2
 from repo_ingestion.file_tree import is_noise
 
 
+def _month_range(start: str, end: str) -> list[str]:
+    """Generate YYYY-MM strings from start to end, inclusive."""
+    sy, sm = int(start[:4]), int(start[5:7])
+    ey, em = int(end[:4]), int(end[5:7])
+    result: list[str] = []
+    y, m = sy, sm
+    while (y, m) <= (ey, em):
+        result.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return result
+
+
 def _open_repo(repo_path: str) -> pygit2.Repository | None:
     try:
         return pygit2.Repository(repo_path)
@@ -155,6 +170,93 @@ def bus_factor_data(
 
     _walk_tree(head.tree)
     return result
+
+
+def commit_velocity(
+    repo_path: str, ref: str = "HEAD"
+) -> Dict[str, object]:
+    """
+    Compute commit frequency and code churn (lines added/removed) bucketed
+    by calendar month.  Returns gap-filled month arrays suitable for charting.
+    """
+    repo = _open_repo(repo_path)
+    if repo is None:
+        return _empty_velocity()
+
+    head = _resolve_ref(repo, ref)
+    if head is None:
+        return _empty_velocity()
+
+    monthly_commits: Dict[str, int] = defaultdict(int)
+    monthly_added: Dict[str, int] = defaultdict(int)
+    monthly_removed: Dict[str, int] = defaultdict(int)
+    first_ts: int | None = None
+    last_ts: int | None = None
+    total = 0
+
+    for commit in repo.walk(head.id, pygit2.GIT_SORT_TOPOLOGICAL):
+        ts = commit.author.time
+        dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+        month_key = dt.strftime("%Y-%m")
+
+        monthly_commits[month_key] += 1
+        total += 1
+
+        if first_ts is None or ts < first_ts:
+            first_ts = ts
+        if last_ts is None or ts > last_ts:
+            last_ts = ts
+
+        try:
+            if commit.parents:
+                diff = commit.parents[0].tree.diff_to_tree(commit.tree)
+            else:
+                empty_oid = repo.TreeBuilder().write()
+                empty_tree = repo.get(empty_oid)
+                diff = empty_tree.diff_to_tree(commit.tree)
+
+            stats = diff.stats
+            monthly_added[month_key] += stats.insertions
+            monthly_removed[month_key] += stats.deletions
+        except Exception:
+            pass
+
+    if not monthly_commits:
+        return _empty_velocity()
+
+    all_months_raw = sorted(monthly_commits.keys())
+    all_months = _month_range(all_months_raw[0], all_months_raw[-1])
+
+    first_date = (
+        datetime.datetime.fromtimestamp(first_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+        if first_ts else None
+    )
+    last_date = (
+        datetime.datetime.fromtimestamp(last_ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+        if last_ts else None
+    )
+
+    return {
+        "months": all_months,
+        "commits_per_month": [monthly_commits.get(m, 0) for m in all_months],
+        "lines_added_per_month": [monthly_added.get(m, 0) for m in all_months],
+        "lines_removed_per_month": [monthly_removed.get(m, 0) for m in all_months],
+        "total_commits": total,
+        "first_commit_date": first_date,
+        "last_commit_date": last_date,
+    }
+
+
+def _empty_velocity() -> Dict[str, object]:
+    return {
+        "months": [],
+        "commits_per_month": [],
+        "lines_added_per_month": [],
+        "lines_removed_per_month": [],
+        "total_commits": 0,
+        "first_commit_date": None,
+        "last_commit_date": None,
+    }
 
 
 def contributor_recency_score(
