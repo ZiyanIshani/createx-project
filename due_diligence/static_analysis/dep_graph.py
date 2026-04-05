@@ -65,7 +65,7 @@ def resolve_import(
             return resolved
 
         # Try with common extensions
-        for ext in [".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs"]:
+        for ext in [".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".c", ".h"]:
             candidate = resolved + ext
             if candidate in all_files:
                 return candidate
@@ -98,7 +98,7 @@ def resolve_import(
     # Try path-without-ext match for dotted names → path conversion
     # e.g. "utils.helpers" → "utils/helpers.py"
     path_guess = raw_import.replace(".", "/")
-    for ext in [".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs"]:
+    for ext in [".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".c", ".h"]:
         candidate = path_guess + ext
         if candidate in all_files_set:
             return candidate
