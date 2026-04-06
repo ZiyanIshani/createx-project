@@ -56,7 +56,13 @@ def dashboard():
     global _result
     if _result is None:
         _result = _run_pipeline(_repo_path, ref=_ref, use_llm=_use_llm)
-    return render_template("dashboard.html", data=_result, repo_name=_repo_name, repo_url=_repo_url)
+    return render_template(
+        "dashboard.html",
+        data=_result,
+        repo_name=_repo_name,
+        repo_url=_repo_url,
+        bus_data=_result.get("bus_data", {}),
+    )
 
 
 @app.route("/graph-data")
