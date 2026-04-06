@@ -117,7 +117,7 @@
 
     <!-- Commit Velocity -->
     {% if data.commit_velocity and data.commit_velocity.months %}
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
       <div class="card p-6">
         <div class="section-title">Commit Frequency</div>
         <p class="section-desc">
@@ -138,6 +138,15 @@
           <canvas id="churnChart"></canvas>
         </div>
       </div>
+      {% if data.contributor_timeline %}
+      <div class="card p-6">
+        <div class="section-title">Contributor Activity</div>
+        <p class="section-desc">Commits per month per contributor (top 5). Shows who is driving recent activity and who has trailed off.</p>
+        <div style="position: relative; height: 220px;">
+          <canvas id="timelineChart"></canvas>
+        </div>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
 
@@ -147,7 +156,7 @@
       <!-- Language Breakdown -->
       <div class="card p-6">
         <div class="section-title">Language Breakdown</div>
-        <div style="position: relative; height: 220px;">
+        <div style="position: relative; height: 220px; display: flex; align-items: center; justify-content: center;">
           <canvas id="langChart"></canvas>
         </div>
       </div>
@@ -235,6 +244,14 @@
       <div class="card p-6">
         <div class="section-title">Bus Factor Risk</div>
         <p class="section-desc">"Bus factor" = how many people would need to leave before critical knowledge is lost. Files below have only <em>one</em> contributor — if that person leaves, no one else knows this code.</p>
+
+        <!-- Knowledge distribution mini-chart -->
+        {% if bus_data %}
+        <div style="position: relative; height: 100px; margin-bottom: 1rem;">
+          <canvas id="busDistChart"></canvas>
+        </div>
+        {% endif %}
+
         {% if data.bus_factor_risk %}
         <table style="table-layout: fixed;">
           <thead>
@@ -456,26 +473,56 @@
     const palette = ['#818cf8','#a78bfa','#6ee7b7','#fbbf24','#f87171','#38bdf8','#fb923c'];
 
     new Chart(document.getElementById('langChart'), {
-      type: 'bar',
+      type: 'doughnut',
       data: {
         labels: langLabels,
         datasets: [{
           data: langValues,
           backgroundColor: langLabels.map((_, i) => palette[i % palette.length]),
-          borderRadius: 6,
-          borderSkipped: false,
+          borderColor: '#0f1117',
+          borderWidth: 3,
+          hoverOffset: 6,
         }]
       },
       options: {
-        indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { grid: { color: chartGridColor }, ticks: { color: chartTickColor, font: chartFont } },
-          y: { grid: { display: false }, ticks: { color: chartLabelColor, font: chartFont } }
+        cutout: '62%',
+        plugins: {
+          legend: {
+            display: true,
+            position: 'right',
+            labels: { color: chartLabelColor, font: chartFont, boxWidth: 12, padding: 10 },
+          },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                const pct = ((ctx.raw / total) * 100).toFixed(1);
+                return ` ${ctx.label}: ${ctx.raw} files (${pct}%)`;
+              }
+            }
+          }
         }
-      }
+      },
+      plugins: [{
+        id: 'centerLabel',
+        afterDraw(chart) {
+          const { ctx, chartArea } = chart;
+          const cx = (chartArea.left + chartArea.right) / 2;
+          const cy = (chartArea.top + chartArea.bottom) / 2;
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#e2e8f0';
+          ctx.font = 'bold 20px system-ui';
+          ctx.fillText(langLabels.length, cx, cy - 8);
+          ctx.fillStyle = '#6b7280';
+          ctx.font = '11px system-ui';
+          ctx.fillText('languages', cx, cy + 10);
+          ctx.restore();
+        }
+      }]
     });
 
     // ── External deps chart ──
@@ -512,15 +559,19 @@
     const velCommits = {{ data.commit_velocity.commits_per_month | tojson }};
 
     new Chart(document.getElementById('velocityChart'), {
-      type: 'bar',
+      type: 'line',
       data: {
         labels: velMonths,
         datasets: [{
           label: 'Commits',
           data: velCommits,
-          backgroundColor: '#818cf8',
-          borderRadius: 4,
-          borderSkipped: false,
+          borderColor: '#818cf8',
+          backgroundColor: 'rgba(129, 140, 248, 0.15)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
         }]
       },
       options: {
@@ -552,23 +603,31 @@
     const churnRemoved = {{ data.commit_velocity.lines_removed_per_month | tojson }};
 
     new Chart(document.getElementById('churnChart'), {
-      type: 'bar',
+      type: 'line',
       data: {
         labels: velMonths,
         datasets: [
           {
             label: 'Lines added',
             data: churnAdded,
-            backgroundColor: 'rgba(74, 222, 128, 0.7)',
-            borderRadius: 3,
-            borderSkipped: false,
+            borderColor: 'rgba(74, 222, 128, 0.9)',
+            backgroundColor: 'rgba(74, 222, 128, 0.12)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHoverRadius: 4,
           },
           {
             label: 'Lines removed',
-            data: churnRemoved.map(v => -v),
-            backgroundColor: 'rgba(248, 113, 113, 0.7)',
-            borderRadius: 3,
-            borderSkipped: false,
+            data: churnRemoved,
+            borderColor: 'rgba(248, 113, 113, 0.9)',
+            backgroundColor: 'rgba(248, 113, 113, 0.12)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHoverRadius: 4,
           }
         ]
       },
@@ -583,15 +642,13 @@
           tooltip: {
             callbacks: {
               label: function(ctx) {
-                const v = Math.abs(ctx.raw);
-                return ctx.dataset.label + ': ' + v.toLocaleString();
+                return ctx.dataset.label + ': ' + ctx.raw.toLocaleString();
               }
             }
           }
         },
         scales: {
           x: {
-            stacked: true,
             grid: { color: chartGridColor },
             ticks: {
               color: chartTickColor,
@@ -602,18 +659,110 @@
             }
           },
           y: {
-            stacked: true,
             grid: { color: chartGridColor },
+            beginAtZero: true,
             ticks: {
               color: chartTickColor,
               font: chartFont,
-              callback: function(v) { return Math.abs(v).toLocaleString(); }
+              callback: function(v) { return v.toLocaleString(); }
             },
           }
         }
       }
     });
     {% endif %}
+
+    // ── Contributor activity timeline chart ──
+    {% if data.contributor_timeline %}
+    (function() {
+      const tlRaw = {{ data.contributor_timeline | tojson }};
+      const tlContributors = {{ data.contributors | tojson }};
+      // Build ordered list of top 5 contributor emails
+      const topEmails = tlContributors.slice(0, 5).map(c => c.email);
+      const timelineColors = ['#818cf8','#34d399','#fbbf24','#f87171','#38bdf8'];
+      const datasets = topEmails.map((email, i) => {
+        const monthMap = tlRaw[email] || {};
+        const name = (tlContributors.find(c => c.email === email) || {}).name || email.split('@')[0];
+        return {
+          label: name,
+          data: velMonths.map(m => monthMap[m] || 0),
+          borderColor: timelineColors[i % timelineColors.length],
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+        };
+      }).filter(ds => ds.data.some(v => v > 0));
+
+      new Chart(document.getElementById('timelineChart'), {
+        type: 'line',
+        data: { labels: velMonths, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              display: true,
+              position: 'bottom',
+              labels: { color: chartTickColor, font: { size: 10 }, boxWidth: 10, padding: 8 },
+            },
+          },
+          scales: {
+            x: {
+              grid: { color: chartGridColor },
+              ticks: { color: chartTickColor, font: chartFont, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
+            },
+            y: {
+              grid: { color: chartGridColor },
+              beginAtZero: true,
+              ticks: { color: chartTickColor, font: chartFont },
+            },
+          },
+        }
+      });
+    })();
+    {% endif %}
+
+    // ── Bus factor distribution chart ──
+    {% if bus_data %}
+    (function() {
+      const busRaw = {{ bus_data | tojson }};
+      const dist = { '1': 0, '2': 0, '3': 0, '4+': 0 };
+      Object.values(busRaw).forEach(emails => {
+        const n = emails.length;
+        if (n === 1) dist['1']++;
+        else if (n === 2) dist['2']++;
+        else if (n === 3) dist['3']++;
+        else dist['4+']++;
+      });
+      const distLabels = ['1 contributor', '2 contributors', '3 contributors', '4+ contributors'];
+      const distValues = [dist['1'], dist['2'], dist['3'], dist['4+']];
+      const distColors = ['#f87171', '#fb923c', '#fbbf24', '#4ade80'];
+      new Chart(document.getElementById('busDistChart'), {
+        type: 'bar',
+        data: {
+          labels: distLabels,
+          datasets: [{ data: distValues, backgroundColor: distColors, borderRadius: 5, borderSkipped: false }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ` ${ctx.raw} file${ctx.raw !== 1 ? 's' : ''}` } },
+          },
+          scales: {
+            x: { grid: { color: chartGridColor }, ticks: { color: chartTickColor, font: chartFont }, beginAtZero: true },
+            y: { grid: { display: false }, ticks: { color: chartLabelColor, font: chartFont } },
+          }
+        }
+      });
+    })();
+    {% endif %}
+
     // Interactive contributor graph
     let cy;
 
