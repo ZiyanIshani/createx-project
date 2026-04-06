@@ -22,6 +22,7 @@ from repo_ingestion.git_stats import (
     commit_velocity,
     commits_per_email,
     contributor_recency_score,
+    contributor_timeline,
     lines_per_contributor,
 )
 from static_analysis.dep_graph import (
@@ -65,6 +66,7 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> d
     ]
 
     velocity = commit_velocity(repo_path, ref=ref)
+    timeline = contributor_timeline(repo_path, ref=ref)
 
     # --- Generate contributor ↔ file graph image ---
     images_dir = os.path.join(os.path.abspath(repo_path), "images")
@@ -96,6 +98,7 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> d
         "contributors": top_contributors,
         "bus_factor_risk": bus_factor_risk,
         "commit_velocity": velocity,
+        "contributor_timeline": timeline,
         "bus_data": bus_data,
         "dep_graph_metrics": metrics,
         "architectural_risk": arch_risk,
