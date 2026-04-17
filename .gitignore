@@ -1,2 +1,6 @@
 .venv/
-CLAUDE.md 
+CLAUDE.md
+__pycache__/
+*.pyc
+*.pyo
+images/

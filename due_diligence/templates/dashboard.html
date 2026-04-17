@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Due Diligence Report</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <style>
+    body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+    .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 12px; }
+    .section-title { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #6b7280; margin-bottom: 1rem; }
+    .badge-active    { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+    .badge-semi      { background: #422006; color: #fb923c; border: 1px solid #9a3412; }
+    .badge-inactive  { background: #1c1917; color: #9ca3af; border: 1px solid #44403c; }
+    .score-low  { color: #4ade80; }
+    .score-mid  { color: #facc15; }
+    .score-high { color: #f87171; }
+    .risk-bar-fill { height: 6px; border-radius: 3px; background: linear-gradient(90deg, #4ade80, #facc15, #f87171); }
+    table { width: 100%; border-collapse: collapse; }
+    th { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #6b7280; padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #2d3148; }
+    td { padding: 0.6rem 0.75rem; font-size: 0.875rem; border-bottom: 1px solid #1e2133; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1e2133; }
+    .metric-value { font-size: 2rem; font-weight: 700; line-height: 1; }
+    .metric-label { font-size: 0.75rem; color: #6b7280; margin-top: 0.25rem; }
+    .hub-bar { height: 4px; background: #2d3148; border-radius: 2px; margin-top: 4px; }
+    .hub-bar-fill { height: 4px; background: #818cf8; border-radius: 2px; }
+    .section-desc { font-size: 0.75rem; color: #4b5563; margin-top: -0.6rem; margin-bottom: 1rem; line-height: 1.4; }
+    .metric-desc { font-size: 0.7rem; color: #4b5563; margin-top: 0.2rem; line-height: 1.3; }
+    details > summary { cursor: pointer; list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::before { content: "▸ "; font-size: 0.8em; }
+    details[open] > summary::before { content: "▾ "; }
+  </style>
+</head>
+<body class="min-h-screen p-6">
+
+  <!-- Header -->
+  <div class="max-w-7xl mx-auto">
+    <div class="flex items-start justify-between mb-8 flex-wrap gap-4">
+      <div>
+        <div class="text-xs text-indigo-400 font-semibold uppercase tracking-widest mb-1">Technical Due Diligence</div>
+        <h1 class="text-2xl font-bold text-white">{{ repo_name }}</h1>
+        <p class="text-sm text-gray-500 mt-1 font-mono">{{ data.repo_path }}</p>
+      </div>
+      <div class="flex items-center gap-4">
+        {% set score = data.architectural_risk.score %}
+        <div class="card px-6 py-4 text-center min-w-[120px]" title="Aggregate 0–10 score based on circular dependencies, fragile hub concentration, and orphaned file ratio. Lower is better.">
+          <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Arch Risk</div>
+          <div class="metric-value {% if score <= 3 %}score-low{% elif score <= 6 %}score-mid{% else %}score-high{% endif %}">
+            {{ score }}<span class="text-lg text-gray-500">/10</span>
+          </div>
+          <div class="risk-bar-fill mt-2" style="width: 100%; position: relative;">
+            <div style="position: absolute; left: 0; top: 0; height: 6px; width: {{ (score / 10 * 100)|int }}%; background: {% if score <= 3 %}#4ade80{% elif score <= 6 %}#facc15{% else %}#f87171{% endif %}; border-radius: 3px;"></div>
+            <div style="height: 6px; background: #2d3148; border-radius: 3px;"></div>
+          </div>
+        </div>
+        <a href="/refresh" class="text-xs px-4 py-2 rounded-lg border border-indigo-500 text-indigo-400 hover:bg-indigo-500 hover:text-white transition-colors">
+          Re-run
+        </a>
+      </div>
+    </div>
+
+    <!-- Risk reasons -->
+    {% if data.architectural_risk.reasons %}
+    <div class="card p-4 mb-6 flex flex-wrap gap-2 items-center">
+      <span class="text-xs text-gray-500 uppercase tracking-widest mr-2">Findings</span>
+      {% for reason in data.architectural_risk.reasons %}
+      <span class="text-xs px-3 py-1 rounded-full bg-yellow-900/40 text-yellow-300 border border-yellow-700/40">{{ reason }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Metric cards -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+      {% set m = data.dep_graph_metrics %}
+      {% set tc = data.test_coverage %}
+      <div class="card p-5" title="Files tracked by git in this repository.">
+        <div class="metric-value text-indigo-400">{{ m.internal_file_count }}</div>
+        <div class="metric-label">Internal files</div>
+        <div class="metric-desc">Files tracked by git in this repo</div>
+      </div>
+      <div class="card p-5" title="Distinct third-party packages imported across the codebase (e.g. flask, numpy).">
+        <div class="metric-value text-purple-400">{{ m.external_dep_count }}</div>
+        <div class="metric-label">External dependencies</div>
+        <div class="metric-desc">Distinct third-party packages imported</div>
+      </div>
+      <div class="card p-5" title="Groups of files that import each other in a loop (A→B→A). Creates tight coupling and can cause initialization bugs.">
+        <div class="metric-value {% if m.circular_dependency_groups|length > 0 %}text-red-400{% else %}text-green-400{% endif %}">
+          {{ m.circular_dependency_groups|length }}
+        </div>
+        <div class="metric-label">Circular dep groups</div>
+        <div class="metric-desc">Import loops between files</div>
+      </div>
+      <div class="card p-5" title="Files never imported by anything else. May be dead code, standalone scripts, or files with broken import paths.">
+        <div class="metric-value {% if m.orphaned_files|length > 5 %}text-yellow-400{% else %}text-gray-300{% endif %}">
+          {{ m.orphaned_files|length }}
+        </div>
+        <div class="metric-label">Orphaned files</div>
+        <div class="metric-desc">Not imported by anything</div>
+      </div>
+      <div class="card p-5" title="Number of test files detected via naming conventions (test_*, *_test, *.spec, etc).">
+        <div class="metric-value text-cyan-400">{{ tc.test_file_count }}</div>
+        <div class="metric-label">Test files</div>
+        <div class="metric-desc">Ratio: {{ tc.test_to_source_ratio }} test:source</div>
+      </div>
+      <div class="card p-5" title="Percentage of source files directly imported by at least one test file.">
+        <div class="metric-value {% if tc.coverage_percent >= 50 %}text-green-400{% elif tc.coverage_percent >= 20 %}text-yellow-400{% else %}text-red-400{% endif %}">
+          {{ tc.coverage_percent }}%
+        </div>
+        <div class="metric-label">Test coverage est.</div>
+        <div class="metric-desc">Source files imported by tests</div>
+      </div>
+    </div>
+
+    <!-- Commit Velocity -->
+    {% if data.commit_velocity and data.commit_velocity.months %}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+      <div class="card p-6">
+        <div class="section-title">Commit Frequency</div>
+        <p class="section-desc">
+          Commits per month from {{ data.commit_velocity.first_commit_date }} to {{ data.commit_velocity.last_commit_date }}.
+          Total: <strong class="text-white">{{ data.commit_velocity.total_commits }}</strong> commits.
+        </p>
+        <div style="position: relative; height: 220px;">
+          <canvas id="velocityChart"></canvas>
+        </div>
+      </div>
+      <div class="card p-6">
+        <div class="section-title">Code Churn</div>
+        <p class="section-desc">
+          Lines added <span class="text-green-400">(green)</span> and removed <span class="text-red-400">(red)</span> per month.
+          Large spikes may indicate rewrites or major refactors.
+        </p>
+        <div style="position: relative; height: 220px;">
+          <canvas id="churnChart"></canvas>
+        </div>
+      </div>
+      {% if data.contributor_timeline %}
+      <div class="card p-6">
+        <div class="section-title">Contributor Activity</div>
+        <p class="section-desc">Commits per month per contributor (top 5). Shows who is driving recent activity and who has trailed off.</p>
+        <div style="position: relative; height: 220px;">
+          <canvas id="timelineChart"></canvas>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Row: Language + Contributors -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+
+      <!-- Language Breakdown -->
+      <div class="card p-6">
+        <div class="section-title">Language Breakdown</div>
+        <div style="position: relative; height: 220px; display: flex; align-items: center; justify-content: center;">
+          <canvas id="langChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Top Contributors -->
+      <div class="card p-6">
+        <div class="flex items-start justify-between gap-4 mb-3">
+          <div>
+            <div class="section-title" style="margin-bottom: 0.3rem;">Top Contributors</div>
+            <p class="section-desc" style="margin-bottom:0;">Status reflects recency of last commit: <strong class="text-green-600">active</strong> = within 6 months, <strong class="text-orange-600">semi-active</strong> = 6–18 months, <strong class="text-gray-500">inactive</strong> = over 18 months ago.</p>
+          </div>
+          <div class="flex gap-1 shrink-0" id="sort-toggle">
+            <button onclick="sortContributors('commits')" id="btn-commits"
+              class="text-xs px-3 py-1 rounded-md border border-indigo-500 bg-indigo-500 text-white font-semibold transition-colors">
+              By Commits
+            </button>
+            <button onclick="sortContributors('lines')" id="btn-lines"
+              class="text-xs px-3 py-1 rounded-md border border-indigo-500 text-indigo-400 font-semibold transition-colors hover:bg-indigo-500 hover:text-white">
+              By Lines Added
+            </button>
+          </div>
+        </div>
+        <table id="contributors-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th id="th-commits" class="tabular-nums">Commits ↓</th>
+              <th id="th-lines" class="tabular-nums">Lines Added</th>
+              <th>Status</th>
+              <th>Email</th>
+            </tr>
+          </thead>
+          <tbody id="contributors-body">
+            {% for c in data.contributors %}
+            <tr data-commits="{{ c.commit_count }}" data-lines="{{ c.lines_added }}">
+              <td class="font-medium text-white">{{ c.name }}</td>
+              <td class="tabular-nums">{{ c.commit_count }}</td>
+              <td class="tabular-nums">{{ "{:,}".format(c.lines_added) }}</td>
+              <td>
+                {% if c.recency_score == 1.0 %}
+                <span class="badge-active text-xs px-2 py-0.5 rounded-full font-semibold">active</span>
+                {% elif c.recency_score == 0.5 %}
+                <span class="badge-semi text-xs px-2 py-0.5 rounded-full font-semibold">semi-active</span>
+                {% else %}
+                <span class="badge-inactive text-xs px-2 py-0.5 rounded-full font-semibold">inactive</span>
+                {% endif %}
+              </td>
+              <td class="text-gray-400 font-mono text-xs">{{ c.email }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Row: Test Coverage Detail + Bus Factor -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+
+      <!-- Test Coverage Detail -->
+      <div class="card p-6">
+        <div class="section-title">Test Coverage Detail</div>
+        <p class="section-desc">Source files not directly imported by any test file. These modules have <em>zero</em> direct test coverage and represent blind spots in the test suite.</p>
+        {% if tc.untested_files %}
+        <table style="table-layout: fixed;">
+          <thead>
+            <tr><th>Untested Source File</th></tr>
+          </thead>
+          <tbody>
+            {% for f in tc.untested_files %}
+            <tr>
+              <td class="font-mono text-xs text-red-300" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ f }}">{{ f }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if tc.untested_files|length >= 20 %}
+        <p class="text-xs text-gray-500 mt-2">Showing first 20 of {{ tc.source_file_count - tc.tested_files|length }} untested files.</p>
+        {% endif %}
+        {% else %}
+        <p class="text-sm text-green-400">All source files have at least one test importing them.</p>
+        {% endif %}
+      </div>
+
+      <!-- Bus Factor Risk -->
+      <div class="card p-6">
+        <div class="section-title">Bus Factor Risk</div>
+        <p class="section-desc">"Bus factor" = how many people would need to leave before critical knowledge is lost. Files below have only <em>one</em> contributor — if that person leaves, no one else knows this code.</p>
+
+        <!-- Knowledge distribution mini-chart -->
+        {% if bus_data %}
+        <div style="position: relative; height: 100px; margin-bottom: 1rem;">
+          <canvas id="busDistChart"></canvas>
+        </div>
+        {% endif %}
+
+        {% if data.bus_factor_risk %}
+        <table style="table-layout: fixed;">
+          <thead>
+            <tr>
+              <th style="width: 55%;">File</th>
+              <th style="width: 45%;">Sole Contributor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in data.bus_factor_risk %}
+            <tr>
+              <td class="font-mono text-xs text-indigo-300" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ item.file }}">{{ item.file }}</td>
+              <td class="text-gray-400 text-xs font-mono" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ item.sole_contributor }}">{{ item.sole_contributor }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-sm text-green-400">No bus factor risk detected.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Row: Fragile Hubs + External Deps -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+
+      <!-- Fragile Hubs -->
+      <div class="card p-6">
+        <div class="section-title">Fragile Hubs</div>
+        <p class="section-desc">Files imported by many others. A bug or breaking change here cascades across the whole codebase — these are your highest-risk files to modify.</p>
+        {% set max_indegree = data.dep_graph_metrics.fragile_files[0].in_degree if data.dep_graph_metrics.fragile_files else 1 %}
+        {% if data.dep_graph_metrics.fragile_files %}
+        <div class="space-y-3">
+          {% for ff in data.dep_graph_metrics.fragile_files %}
+          <div>
+            <div class="flex justify-between items-baseline">
+              <span class="text-xs font-mono text-indigo-300">{{ ff.file.split('/')[-1] }}</span>
+              <span class="text-xs text-gray-400">{{ ff.in_degree }} imports</span>
+            </div>
+            <div class="text-xs text-gray-600 mb-1 font-mono">{{ ff.file }}</div>
+            <div class="hub-bar">
+              <div class="hub-bar-fill" style="width: {{ ((ff.in_degree / max_indegree) * 100)|int }}%;"></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-500">No fragile hubs detected.</p>
+        {% endif %}
+      </div>
+
+      <!-- External Dependencies -->
+      <div class="card p-6">
+        <div class="section-title">Top External Dependencies</div>
+        <p class="section-desc">Third-party packages imported most frequently across the codebase. High usage of any single package is a supply-chain risk if it becomes unmaintained or has a security vulnerability.</p>
+        <div style="position: relative; height: 220px;">
+          <canvas id="depsChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dep graph stats -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div class="card p-6">
+        <div class="section-title">Dependency Graph Stats</div>
+        <p class="section-desc">How files in the codebase connect to each other through imports.</p>
+        <div class="grid grid-cols-2 gap-4">
+          <div title="Total number of import relationships between files.">
+            <div class="text-2xl font-bold text-white">{{ m.edge_count }}</div>
+            <div class="metric-label">Total edges</div>
+            <div class="metric-desc">Import relationships between files</div>
+          </div>
+          <div title="On average, how many other files import each file. Higher = more coupled.">
+            <div class="text-2xl font-bold text-white">{{ "%.2f"|format(m.avg_in_degree) }}</div>
+            <div class="metric-label">Avg in-degree</div>
+            <div class="metric-desc">Avg number of files importing each file</div>
+          </div>
+          <div title="The single most-imported file's import count. A very high number signals a fragile hub.">
+            <div class="text-2xl font-bold text-white">{{ m.max_in_degree }}</div>
+            <div class="metric-label">Max in-degree</div>
+            <div class="metric-desc">Most imported single file's count</div>
+          </div>
+          <div title="Whether any files import each other in a loop. Circular deps cause tight coupling and initialization bugs.">
+            <div class="text-2xl font-bold {% if m.circular_dependency_groups|length > 0 %}text-red-400{% else %}text-green-400{% endif %}">
+              {% if m.circular_dependency_groups|length > 0 %}Yes{% else %}None{% endif %}
+            </div>
+            <div class="metric-label">Circular deps</div>
+            <div class="metric-desc">Import loops between files</div>
+          </div>
+        </div>
+        {% if m.circular_dependency_groups %}
+        <div class="mt-4">
+          <div class="text-xs text-gray-500 uppercase tracking-widest mb-2">Circular Groups</div>
+          {% for group in m.circular_dependency_groups %}
+          <div class="text-xs font-mono text-red-300 bg-red-950/30 border border-red-800/30 rounded p-2 mb-1">
+            {{ group | join(' → ') }}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Test files list (collapsible) -->
+      <div class="card p-6">
+        <div class="section-title">Detected Test Files</div>
+        <p class="section-desc">Files identified as tests via naming conventions (test_*, *_test, *.spec, conftest, etc.) and directory placement (tests/, __tests__/).</p>
+        {% if tc.test_files %}
+        <details>
+          <summary class="text-xs text-indigo-400 font-semibold mb-2">{{ tc.test_file_count }} test file{{ "s" if tc.test_file_count != 1 }} detected</summary>
+          <div class="mt-2 max-h-48 overflow-y-auto">
+            {% for f in tc.test_files %}
+            <div class="text-xs font-mono text-gray-400 py-0.5">{{ f }}</div>
+            {% endfor %}
+          </div>
+        </details>
+        {% else %}
+        <p class="text-sm text-yellow-400">No test files detected.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- LLM Summaries (only if available) -->
+    {% if data.llm_summaries %}
+    <div class="card p-6 mb-6">
+      <div class="section-title">AI File Summaries</div>
+      <p class="section-desc">LLM-generated summaries for the most central internal files (highest in-degree). These are the files that would cause the most damage if modified incorrectly.</p>
+      <div class="space-y-4">
+        {% for s in data.llm_summaries %}
+        <details class="bg-[#141620] border border-[#2d3148] rounded-lg">
+          <summary class="p-4 flex justify-between items-center">
+            <span class="font-mono text-sm text-indigo-300">{{ s.file }}</span>
+            <div class="flex items-center gap-3">
+              {% if s._metrics %}
+              <span class="text-xs text-gray-500">in-degree: {{ s._metrics.in_degree }}</span>
+              {% endif %}
+              <span class="text-xs px-2 py-0.5 rounded-full
+                {% if s.confidence == 'high' %}bg-green-900/40 text-green-400 border border-green-700/40
+                {% elif s.confidence == 'medium' %}bg-yellow-900/40 text-yellow-400 border border-yellow-700/40
+                {% else %}bg-red-900/40 text-red-400 border border-red-700/40{% endif %}">
+                {{ s.confidence }} confidence
+              </span>
+            </div>
+          </summary>
+          <div class="px-4 pb-4 space-y-3">
+            <div>
+              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Role</div>
+              <p class="text-sm text-gray-300">{{ s.role }}</p>
+            </div>
+            {% if s.key_responsibilities %}
+            <div>
+              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Key Responsibilities</div>
+              <ul class="text-sm text-gray-400 list-disc list-inside">
+                {% for r in s.key_responsibilities %}<li>{{ r }}</li>{% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if s.why_central %}
+            <div>
+              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Why Central</div>
+              <p class="text-sm text-gray-400">{{ s.why_central }}</p>
+            </div>
+            {% endif %}
+            {% if s.risk_notes %}
+            <div>
+              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Risk Notes</div>
+              <ul class="text-sm text-orange-300/80 list-disc list-inside">
+                {% for r in s.risk_notes %}<li>{{ r }}</li>{% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+          </div>
+        </details>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Contributor ↔ File Graph (interactive) -->
+    <div class="card p-6 mb-6">
+      <div class="flex items-start justify-between gap-4 mb-1">
+        <div>
+          <div class="section-title" style="margin-bottom: 0.3rem;">Contributor ↔ File Ownership Graph</div>
+          <p class="section-desc" style="margin-bottom:0;">Blue circles = contributors, orange squares = files. Scroll to zoom, drag to pan. Click any node to highlight its connections.</p>
+        </div>
+        <button onclick="fitGraph()" class="text-xs px-3 py-1 rounded-md border border-indigo-500 text-indigo-400 hover:bg-indigo-500 hover:text-white font-semibold transition-colors shrink-0">
+          Fit to screen
+        </button>
+      </div>
+
+      <!-- Legend -->
+      <div class="flex gap-4 mb-3 mt-3">
+        <div class="flex items-center gap-1.5 text-xs text-gray-400">
+          <div style="width:12px;height:12px;border-radius:50%;background:#4A90D9;"></div> Contributor
+        </div>
+        <div class="flex items-center gap-1.5 text-xs text-gray-400">
+          <div style="width:12px;height:12px;background:#E8913A;"></div> File
+        </div>
+      </div>
+
+      <div id="cy" style="width:100%;height:520px;background:#0f1117;border-radius:8px;"></div>
+
+      <!-- Hover tooltip -->
+      <div id="cy-tooltip" style="position:fixed;background:#1a1d27;border:1px solid #2d3148;color:#e2e8f0;font-size:0.75rem;padding:6px 10px;border-radius:6px;pointer-events:none;display:none;max-width:320px;word-break:break-all;font-family:monospace;z-index:1000;"></div>
+    </div>
+
+  </div>
+
+  <script>
+    const chartGridColor = '#2d3148';
+    const chartTickColor = '#6b7280';
+    const chartLabelColor = '#cbd5e1';
+    const chartFont = { size: 11 };
+
+    // ── Language chart ──
+    const langData = {{ data.languages.summary | tojson }};
+    delete langData['Unknown'];
+    const langLabels = Object.keys(langData).sort((a, b) => langData[b] - langData[a]);
+    const langValues = langLabels.map(k => langData[k]);
+    const palette = ['#818cf8','#a78bfa','#6ee7b7','#fbbf24','#f87171','#38bdf8','#fb923c'];
+
+    new Chart(document.getElementById('langChart'), {
+      type: 'doughnut',
+      data: {
+        labels: langLabels,
+        datasets: [{
+          data: langValues,
+          backgroundColor: langLabels.map((_, i) => palette[i % palette.length]),
+          borderColor: '#0f1117',
+          borderWidth: 3,
+          hoverOffset: 6,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '62%',
+        plugins: {
+          legend: {
+            display: true,
+            position: 'right',
+            labels: { color: chartLabelColor, font: chartFont, boxWidth: 12, padding: 10 },
+          },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                const pct = ((ctx.raw / total) * 100).toFixed(1);
+                return ` ${ctx.label}: ${ctx.raw} files (${pct}%)`;
+              }
+            }
+          }
+        }
+      },
+      plugins: [{
+        id: 'centerLabel',
+        afterDraw(chart) {
+          const { ctx, chartArea } = chart;
+          const cx = (chartArea.left + chartArea.right) / 2;
+          const cy = (chartArea.top + chartArea.bottom) / 2;
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#e2e8f0';
+          ctx.font = 'bold 20px system-ui';
+          ctx.fillText(langLabels.length, cx, cy - 8);
+          ctx.fillStyle = '#6b7280';
+          ctx.font = '11px system-ui';
+          ctx.fillText('languages', cx, cy + 10);
+          ctx.restore();
+        }
+      }]
+    });
+
+    // ── External deps chart ──
+    const depsRaw = {{ data.dep_graph_metrics.top_external_deps | tojson }};
+    const depsLabels = depsRaw.map(d => d.package);
+    const depsValues = depsRaw.map(d => d.import_count);
+
+    new Chart(document.getElementById('depsChart'), {
+      type: 'bar',
+      data: {
+        labels: depsLabels,
+        datasets: [{
+          data: depsValues,
+          backgroundColor: '#6ee7b7',
+          borderRadius: 6,
+          borderSkipped: false,
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: chartGridColor }, ticks: { color: chartTickColor, font: chartFont } },
+          y: { grid: { display: false }, ticks: { color: chartLabelColor, font: chartFont } }
+        }
+      }
+    });
+
+    // ── Commit velocity chart ──
+    {% if data.commit_velocity and data.commit_velocity.months %}
+    const velMonths = {{ data.commit_velocity.months | tojson }};
+    const velCommits = {{ data.commit_velocity.commits_per_month | tojson }};
+
+    new Chart(document.getElementById('velocityChart'), {
+      type: 'line',
+      data: {
+        labels: velMonths,
+        datasets: [{
+          label: 'Commits',
+          data: velCommits,
+          borderColor: '#818cf8',
+          backgroundColor: 'rgba(129, 140, 248, 0.15)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            grid: { color: chartGridColor },
+            ticks: {
+              color: chartTickColor,
+              font: chartFont,
+              maxRotation: 45,
+              autoSkip: true,
+              maxTicksLimit: 18,
+            }
+          },
+          y: {
+            grid: { color: chartGridColor },
+            ticks: { color: chartTickColor, font: chartFont },
+            beginAtZero: true,
+          }
+        }
+      }
+    });
+
+    // ── Code churn chart ──
+    const churnAdded = {{ data.commit_velocity.lines_added_per_month | tojson }};
+    const churnRemoved = {{ data.commit_velocity.lines_removed_per_month | tojson }};
+
+    new Chart(document.getElementById('churnChart'), {
+      type: 'line',
+      data: {
+        labels: velMonths,
+        datasets: [
+          {
+            label: 'Lines added',
+            data: churnAdded,
+            borderColor: 'rgba(74, 222, 128, 0.9)',
+            backgroundColor: 'rgba(74, 222, 128, 0.12)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+          },
+          {
+            label: 'Lines removed',
+            data: churnRemoved,
+            borderColor: 'rgba(248, 113, 113, 0.9)',
+            backgroundColor: 'rgba(248, 113, 113, 0.12)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            labels: { color: chartTickColor, font: chartFont, boxWidth: 12 },
+          },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                return ctx.dataset.label + ': ' + ctx.raw.toLocaleString();
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: chartGridColor },
+            ticks: {
+              color: chartTickColor,
+              font: chartFont,
+              maxRotation: 45,
+              autoSkip: true,
+              maxTicksLimit: 18,
+            }
+          },
+          y: {
+            grid: { color: chartGridColor },
+            beginAtZero: true,
+            ticks: {
+              color: chartTickColor,
+              font: chartFont,
+              callback: function(v) { return v.toLocaleString(); }
+            },
+          }
+        }
+      }
+    });
+    {% endif %}
+
+    // ── Contributor activity timeline chart ──
+    {% if data.contributor_timeline %}
+    (function() {
+      const tlRaw = {{ data.contributor_timeline | tojson }};
+      const tlContributors = {{ data.contributors | tojson }};
+      // Build ordered list of top 5 contributor emails
+      const topEmails = tlContributors.slice(0, 5).map(c => c.email);
+      const timelineColors = ['#818cf8','#34d399','#fbbf24','#f87171','#38bdf8'];
+      const datasets = topEmails.map((email, i) => {
+        const monthMap = tlRaw[email] || {};
+        const name = (tlContributors.find(c => c.email === email) || {}).name || email.split('@')[0];
+        return {
+          label: name,
+          data: velMonths.map(m => monthMap[m] || 0),
+          borderColor: timelineColors[i % timelineColors.length],
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+        };
+      }).filter(ds => ds.data.some(v => v > 0));
+
+      new Chart(document.getElementById('timelineChart'), {
+        type: 'line',
+        data: { labels: velMonths, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              display: true,
+              position: 'bottom',
+              labels: { color: chartTickColor, font: { size: 10 }, boxWidth: 10, padding: 8 },
+            },
+          },
+          scales: {
+            x: {
+              grid: { color: chartGridColor },
+              ticks: { color: chartTickColor, font: chartFont, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
+            },
+            y: {
+              grid: { color: chartGridColor },
+              beginAtZero: true,
+              ticks: { color: chartTickColor, font: chartFont },
+            },
+          },
+        }
+      });
+    })();
+    {% endif %}
+
+    // ── Bus factor distribution chart ──
+    {% if bus_data %}
+    (function() {
+      const busRaw = {{ bus_data | tojson }};
+      const dist = { '1': 0, '2': 0, '3': 0, '4+': 0 };
+      Object.values(busRaw).forEach(emails => {
+        const n = emails.length;
+        if (n === 1) dist['1']++;
+        else if (n === 2) dist['2']++;
+        else if (n === 3) dist['3']++;
+        else dist['4+']++;
+      });
+      const distLabels = ['1 contributor', '2 contributors', '3 contributors', '4+ contributors'];
+      const distValues = [dist['1'], dist['2'], dist['3'], dist['4+']];
+      const distColors = ['#f87171', '#fb923c', '#fbbf24', '#4ade80'];
+      new Chart(document.getElementById('busDistChart'), {
+        type: 'bar',
+        data: {
+          labels: distLabels,
+          datasets: [{ data: distValues, backgroundColor: distColors, borderRadius: 5, borderSkipped: false }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ` ${ctx.raw} file${ctx.raw !== 1 ? 's' : ''}` } },
+          },
+          scales: {
+            x: { grid: { color: chartGridColor }, ticks: { color: chartTickColor, font: chartFont }, beginAtZero: true },
+            y: { grid: { display: false }, ticks: { color: chartLabelColor, font: chartFont } },
+          }
+        }
+      });
+    })();
+    {% endif %}
+
+    // Interactive contributor graph
+    let cy;
+
+    function fitGraph() {
+      if (cy) cy.fit(undefined, 40);
+    }
+
+    fetch('/graph-data')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.nodes.length) {
+          document.getElementById('cy').innerHTML = '<p style="color:#6b7280;padding:2rem;text-align:center;">No graph data available.</p>';
+          return;
+        }
+
+        cy = cytoscape({
+          container: document.getElementById('cy'),
+          elements: [...data.nodes, ...data.edges],
+          style: [
+            {
+              selector: 'node[kind="person"]',
+              style: {
+                'background-color': '#4A90D9',
+                'label': 'data(label)',
+                'color': '#e2e8f0',
+                'font-size': '11px',
+                'font-weight': 'bold',
+                'text-valign': 'bottom',
+                'text-margin-y': '4px',
+                'width': '36px',
+                'height': '36px',
+                'text-outline-color': '#0f1117',
+                'text-outline-width': '2px',
+              }
+            },
+            {
+              selector: 'node[kind="file"]',
+              style: {
+                'background-color': '#E8913A',
+                'shape': 'rectangle',
+                'label': 'data(label)',
+                'color': '#e2e8f0',
+                'font-size': '9px',
+                'text-valign': 'bottom',
+                'text-margin-y': '4px',
+                'width': '24px',
+                'height': '24px',
+                'text-outline-color': '#0f1117',
+                'text-outline-width': '2px',
+              }
+            },
+            {
+              selector: 'edge',
+              style: {
+                'line-color': '#a0aec0',
+                'opacity': 0.5,
+                'width': 1.2,
+                'curve-style': 'bezier',
+              }
+            },
+            {
+              selector: 'node:selected',
+              style: { 'border-width': '2px', 'border-color': '#818cf8' }
+            },
+            {
+              selector: 'node.highlighted',
+              style: { 'border-width': '2px', 'border-color': '#fbbf24', 'opacity': 1 }
+            },
+            {
+              selector: 'node.faded',
+              style: { 'opacity': 0.2 }
+            },
+            {
+              selector: 'edge.faded',
+              style: { 'opacity': 0.05 }
+            },
+          ],
+          layout: {
+            name: 'cose',
+            animate: false,
+            idealEdgeLength: 120,
+            nodeRepulsion: 8000,
+            nodeDimensionsIncludeLabels: true,
+            padding: 40,
+          },
+          wheelSensitivity: 0.3,
+          minZoom: 0.1,
+          maxZoom: 4,
+        });
+
+        // Hover tooltip
+        const tooltip = document.getElementById('cy-tooltip');
+        cy.on('mouseover', 'node', e => {
+          const node = e.target;
+          tooltip.textContent = node.data('full_path');
+          tooltip.style.display = 'block';
+        });
+        cy.on('mousemove', e => {
+          tooltip.style.left = (e.originalEvent.clientX + 12) + 'px';
+          tooltip.style.top  = (e.originalEvent.clientY + 12) + 'px';
+        });
+        cy.on('mouseout', 'node', () => { tooltip.style.display = 'none'; });
+
+        // Highlight connected nodes on click
+        cy.on('tap', 'node', e => {
+          const node = e.target;
+          cy.elements().removeClass('highlighted faded');
+          const connected = node.closedNeighborhood();
+          cy.elements().not(connected).addClass('faded');
+          connected.addClass('highlighted');
+        });
+        cy.on('tap', e => {
+          if (e.target === cy) cy.elements().removeClass('highlighted faded');
+        });
+      });
+
+    function sortContributors(by) {
+      const tbody = document.getElementById('contributors-body');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort((a, b) => parseInt(b.dataset[by]) - parseInt(a.dataset[by]));
+      rows.forEach(r => tbody.appendChild(r));
+
+      const isCommits = by === 'commits';
+      document.getElementById('th-commits').textContent = isCommits ? 'Commits ↓' : 'Commits';
+      document.getElementById('th-lines').textContent = isCommits ? 'Lines Added' : 'Lines Added ↓';
+      document.getElementById('btn-commits').className = `text-xs px-3 py-1 rounded-md border border-indigo-500 font-semibold transition-colors ${isCommits ? 'bg-indigo-500 text-white' : 'text-indigo-400 hover:bg-indigo-500 hover:text-white'}`;
+      document.getElementById('btn-lines').className = `text-xs px-3 py-1 rounded-md border border-indigo-500 font-semibold transition-colors ${!isCommits ? 'bg-indigo-500 text-white' : 'text-indigo-400 hover:bg-indigo-500 hover:text-white'}`;
+    }
+  </script>
+</body>
+</html>
