@@ -35,11 +35,11 @@ def read_file_safely(path: str) -> str:
 # ------------------------
 def get_git_metadata(repo_path: str, file_path: str):
     try:
-        full_path = os.path.join(repo_path, file_path)
-
+        # Use file_path relative to repo_path — do NOT join into an absolute/relative path
+        # that git would reject when running with -C
         authors = subprocess.check_output(
-            ["git", "-C", repo_path, "log", "--pretty=format:%an", "--", full_path],
-            text=True
+            ["git", "-C", repo_path, "log", "--pretty=format:%an", "--", file_path],
+            text=True, stderr=subprocess.DEVNULL
         ).splitlines()
 
         if not authors:
@@ -50,13 +50,13 @@ def get_git_metadata(repo_path: str, file_path: str):
             top_authors[a] = top_authors.get(a, 0) + 1
 
         last_modified = subprocess.check_output(
-            ["git", "-C", repo_path, "log", "-1", "--pretty=format:%cd", "--", full_path],
-            text=True
+            ["git", "-C", repo_path, "log", "-1", "--pretty=format:%cd", "--", file_path],
+            text=True, stderr=subprocess.DEVNULL
         )
 
         first_commit = subprocess.check_output(
-            ["git", "-C", repo_path, "log", "--reverse", "-1", "--pretty=format:%cd", "--", full_path],
-            text=True
+            ["git", "-C", repo_path, "log", "--reverse", "-1", "--pretty=format:%cd", "--", file_path],
+            text=True, stderr=subprocess.DEVNULL
         )
 
         return {
@@ -131,45 +131,48 @@ def select_high_innode_files(graph, top_k=5):
 # ------------------------
 # LLM CALL
 # ------------------------
-def summarize_file_with_llm(file_data, model="llama3"):
+def summarize_file_with_llm(file_data, model=DEFAULT_MODEL):
 
-    prompt = f"""
-Analyze this code file and return JSON.
+    git = file_data.get("git", {})
+    quality = file_data.get("quality", {})
+    authors = ", ".join(a["name"] for a in git.get("top_authors", []))
 
-File: {file_data['file']}
-Language: {file_data['language']}
-
-Also consider:
-- who wrote it
-- when it was modified
-- code quality
-- platform compatibility
-
-Return JSON:
-{{
-  "file": "...",
-  "role": "...",
-  "quality_summary": "...",
-  "ownership_summary": "...",
-  "compatibility_summary": "...",
-  "possible_provenance_flags": ["..."]
-}}
-"""
-
-    response = requests.post(
-        "http://localhost:11434/api/generate",
-        json={
-            "model": model,
-            "prompt": prompt,
-            "stream": False
-        }
+    prompt = (
+        f"You are a code reviewer. Analyze the file below and respond with ONLY a JSON object "
+        f"— no markdown, no explanation, just the raw JSON.\n\n"
+        f"File: {file_data['file']}\n"
+        f"Language: {file_data['language']}\n"
+        f"Top authors: {authors or 'unknown'}\n"
+        f"Last modified: {git.get('last_modified', 'unknown')}\n"
+        f"Lines: {quality.get('num_lines', '?')}, TODOs: {quality.get('todo_count', 0)}\n"
+        f"Platform risks: {file_data.get('platform', [])}\n\n"
+        f"Code (first 2000 chars):\n{file_data.get('code', '')}\n\n"
+        f"Return this exact JSON schema:\n"
+        f'{{"role":"<1 sentence>","quality_summary":"<1 sentence>","ownership_summary":"<1 sentence>",'
+        f'"compatibility_summary":"<1 sentence>","possible_provenance_flags":[]}}'
     )
 
-    text = response.json().get("response", "")
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={"model": model, "prompt": prompt, "stream": False},
+            timeout=120,
+        )
+        response.raise_for_status()
+        text = response.json().get("response", "").strip()
+    except Exception as e:
+        return {"raw_output": f"Ollama request failed: {e}"}
+
+    # Strip markdown code fences if the model wrapped the JSON
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
 
     try:
         return json.loads(text)
-    except:
+    except Exception:
         return {"raw_output": text}
 
 
