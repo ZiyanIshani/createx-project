@@ -1,23 +1,13 @@
 #!/usr/bin/env python3
-"""
-llm_high_innode_summaries.py
-
-Generate LLM summaries for the highest in-degree INTERNAL files in a repo's
-dependency graph, excluding external-library nodes.
-
-Usage:
-    python llm_high_innode_summaries.py <repo_path> [--top-k 10] [--min-in-degree 1]
-"""
 
 from __future__ import annotations
-
 import argparse
 import json
 import os
 import sys
 from typing import Any, Dict, List
-
-from openai import OpenAI
+import requests
+import subprocess
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -25,286 +15,220 @@ from repo_ingestion.file_tree import language_breakdown
 from static_analysis.dep_graph import build_dep_graph
 
 
-MAX_FILE_CHARS = 12000
-DEFAULT_MODEL = "gpt-5-mini"
+MAX_FILE_CHARS = 8000
+DEFAULT_MODEL = "llama3"
 
-def read_file_safely(path: str, max_chars: int = MAX_FILE_CHARS) -> str:
+
+# ------------------------
+# FILE READING
+# ------------------------
+def read_file_safely(path: str) -> str:
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            text = f.read()
-    except OSError:
+            return f.read()
+    except:
         return ""
 
-    if len(text) <= max_chars:
-        return text
 
-    head = text[: max_chars // 2]
-    tail = text[-max_chars // 2 :]
-    return head + "\n\n# ... FILE TRUNCATED FOR PROMPT BUDGET ...\n\n" + tail
+# ------------------------
+# GIT METADATA
+# ------------------------
+def get_git_metadata(repo_path: str, file_path: str):
+    try:
+        full_path = os.path.join(repo_path, file_path)
+
+        authors = subprocess.check_output(
+            ["git", "-C", repo_path, "log", "--pretty=format:%an", "--", full_path],
+            text=True
+        ).splitlines()
+
+        if not authors:
+            return {}
+
+        top_authors = {}
+        for a in authors:
+            top_authors[a] = top_authors.get(a, 0) + 1
+
+        last_modified = subprocess.check_output(
+            ["git", "-C", repo_path, "log", "-1", "--pretty=format:%cd", "--", full_path],
+            text=True
+        )
+
+        first_commit = subprocess.check_output(
+            ["git", "-C", repo_path, "log", "--reverse", "-1", "--pretty=format:%cd", "--", full_path],
+            text=True
+        )
+
+        return {
+            "top_authors": sorted(
+                [{"name": k, "commit_count": v} for k, v in top_authors.items()],
+                key=lambda x: -x["commit_count"]
+            )[:3],
+            "last_modified": last_modified,
+            "first_commit": first_commit
+        }
+
+    except:
+        return {}
 
 
-def internal_nodes_only(graph) -> List[str]:
+# ------------------------
+# QUALITY HEURISTICS
+# ------------------------
+def compute_quality_metrics(file_text: str):
+    lines = file_text.splitlines()
+    num_lines = len(lines)
+
+    todo_count = sum(1 for l in lines if "TODO" in l or "FIXME" in l)
+
+    return {
+        "num_lines": num_lines,
+        "todo_count": todo_count,
+        "large_file": num_lines > 500,
+    }
+
+
+# ------------------------
+# COMPATIBILITY CHECK
+# ------------------------
+def detect_platform_risks(file_text: str):
+    risks = []
+
+    if "C:\\" in file_text:
+        risks.append("Windows-specific paths")
+
+    if "chmod" in file_text or "#!/bin/bash" in file_text:
+        risks.append("Unix-specific commands")
+
+    if "brew install" in file_text:
+        risks.append("macOS-specific dependency")
+
+    return risks
+
+
+# ------------------------
+# FILE SELECTION
+# ------------------------
+def internal_nodes_only(graph):
     return [n for n in graph.nodes() if not str(n).startswith("external:")]
 
 
-def select_high_innode_files(graph, top_k: int = 10, min_in_degree: int = 1) -> List[Dict[str, Any]]:
+def select_high_innode_files(graph, top_k=5):
     internal = internal_nodes_only(graph)
 
-    ranked: List[Dict[str, Any]] = []
+    ranked = []
     for node in internal:
-        indeg = graph.in_degree(node)
-        if indeg >= min_in_degree:
-            ranked.append(
-                {
-                    "file": node,
-                    "in_degree": indeg,
-                    "out_degree": graph.out_degree(node),
-                    "imported_by": sorted(
-                        n for n in graph.predecessors(node)
-                        if not str(n).startswith("external:")
-                    ),
-                    "imports": sorted(
-                        n for n in graph.successors(node)
-                        if not str(n).startswith("external:")
-                    ),
-                }
-            )
+        ranked.append({
+            "file": node,
+            "in_degree": graph.in_degree(node),
+            "out_degree": graph.out_degree(node)
+        })
 
-    ranked.sort(key=lambda x: (-x["in_degree"], x["file"]))
+    ranked.sort(key=lambda x: -x["in_degree"])
     return ranked[:top_k]
 
-def summarize_file_with_llm(
-    client: OpenAI,
-    *,
-    model: str,
-    repo_path: str,
-    rel_path: str,
-    language: str,
-    in_degree: int,
-    out_degree: int,
-    imported_by: List[str],
-    imports: List[str],
-) -> Dict[str, Any]:
-    abs_path = os.path.join(repo_path, rel_path)
-    file_text = read_file_safely(abs_path)
+
+# ------------------------
+# LLM CALL
+# ------------------------
+def summarize_file_with_llm(file_data, model="llama3"):
 
     prompt = f"""
-    You are summarizing an INTERNAL source file from a software repository.
-    
-    Goal:
-    Write a concise technical summary for one high in-degree internal file.
-    This is for repository due diligence / architecture documentation.
-    
-    Rules:
-    - Focus only on THIS file.
-    - Treat only repo files as internal dependencies.
-    - Ignore external libraries/frameworks except where essential to explain the file's purpose.
-    - Do not speculate beyond the provided code and dependency context.
-    - If the file content is truncated, mention that only if it affects confidence.
-    - Return VALID JSON only.
-    
-    Return this exact schema:
-    {{
-      "file": "relative/path.py",
-      "role": "1-2 sentence description of the file's responsibility",
-      "key_responsibilities": ["...", "..."],
-      "important_internal_dependencies": ["..."],
-      "important_internal_dependents": ["..."],
-      "why_central": "Why many internal files depend on it",
-      "risk_notes": ["..."],
-      "confidence": "high|medium|low"
-    }}
-    
-    Repository-relative file: {rel_path}
-    Language: {language}
-    In-degree: {in_degree}
-    Out-degree: {out_degree}
-    
-    Internal files importing this file:
-    {json.dumps(imported_by, indent=2)}
-    
-    Internal files this file imports:
-    {json.dumps(imports, indent=2)}
-    
-    File contents:
-    ```{language.lower()}
-    {file_text}
-    """.strip()
-    response = client.responses.create(
-        model=model,
-        input=prompt,
+Analyze this code file and return JSON.
+
+File: {file_data['file']}
+Language: {file_data['language']}
+
+Also consider:
+- who wrote it
+- when it was modified
+- code quality
+- platform compatibility
+
+Return JSON:
+{{
+  "file": "...",
+  "role": "...",
+  "quality_summary": "...",
+  "ownership_summary": "...",
+  "compatibility_summary": "...",
+  "possible_provenance_flags": ["..."]
+}}
+"""
+
+    response = requests.post(
+        "http://localhost:11434/api/generate",
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False
+        }
     )
 
-    text = response.output_text.strip()
+    text = response.json().get("response", "")
 
     try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return data
-    except json.JSONDecodeError:
-        pass
+        return json.loads(text)
+    except:
+        return {"raw_output": text}
 
-    return {
-        "file": rel_path,
-        "role": "Failed to parse model output as JSON.",
-        "key_responsibilities": [],
-        "important_internal_dependencies": imports,
-        "important_internal_dependents": imported_by,
-        "why_central": "",
-        "risk_notes": [text[:1000]],
-        "confidence": "low",
-    }
 
-def summarize_repo(repo_path: str, *, model: str, top_k: int, min_in_degree: int) -> Dict[str, Any]:
-    client = OpenAI()
+# ------------------------
+# MAIN PIPELINE
+# ------------------------
+def summarize_repo(repo_path):
 
     graph = build_dep_graph(repo_path)
     lang_info = language_breakdown(repo_path)
     per_file_lang = lang_info.get("per_file", {})
 
-    selected = select_high_innode_files(
-        graph,
-        top_k=top_k,
-        min_in_degree=min_in_degree,
-)
-    summaries = []
+    selected = select_high_innode_files(graph)
+
+    results = []
+
     for item in selected:
-        rel_path = item["file"]
-        language = per_file_lang.get(rel_path, "Unknown")
+        file_path = item["file"]
+        abs_path = os.path.join(repo_path, file_path)
 
-        summary = summarize_file_with_llm(
-            client,
-            model=model,
-            repo_path=repo_path,
-            rel_path=rel_path,
-            language=language,
-            in_degree=item["in_degree"],
-            out_degree=item["out_degree"],
-            imported_by=item["imported_by"],
-            imports=item["imports"],
-        )
+        file_text = read_file_safely(abs_path)
 
-        summary["_metrics"] = {
-            "in_degree": item["in_degree"],
-            "out_degree": item["out_degree"],
+        git_meta = get_git_metadata(repo_path, file_path)
+        quality = compute_quality_metrics(file_text)
+        platform = detect_platform_risks(file_text)
+
+        file_data = {
+            "file": file_path,
+            "language": per_file_lang.get(file_path, "unknown"),
+            "git": git_meta,
+            "quality": quality,
+            "platform": platform,
+            "code": file_text[:2000]
         }
-        summaries.append(summary)
 
-    return {
-        "repo_path": os.path.abspath(repo_path),
-        "model": model,
-        "top_k": top_k,
-        "min_in_degree": min_in_degree,
-        "summaries": summaries,
-    }
+        summary = summarize_file_with_llm(file_data)
 
-def write_markdown_report(result: Dict[str, Any], out_path: str) -> None:
-    lines: List[str] = []
-    lines.append("# High In-Node Internal File Summaries\n")
-    lines.append(f"Repository: {result['repo_path']}\n")
-    lines.append(f"Model: {result['model']}\n")
+        results.append(summary)
 
-    for s in result["summaries"]:
-        lines.append(f"## `{s['file']}`")
-        lines.append(f"**Role:** {s.get('role', '')}")
-        lines.append("")
-        lines.append(
-            f"**Graph metrics:** in-degree={s['_metrics']['in_degree']}, "
-            f"out-degree={s['_metrics']['out_degree']}"
-        )
-        lines.append("")
+    return results
 
-        kr = s.get("key_responsibilities", [])
-        if kr:
-            lines.append("**Key responsibilities**")
-            for item in kr:
-                lines.append(f"- {item}")
-            lines.append("")
 
-        deps = s.get("important_internal_dependencies", [])
-        if deps:
-            lines.append("**Important internal dependencies**")
-            for item in deps:
-                lines.append(f"- `{item}`")
-            lines.append("")
+# ------------------------
+# ENTRY
+# ------------------------
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("repo_path")
+    parser.add_argument("--out", default="enhanced_summaries.json")
 
-        dependents = s.get("important_internal_dependents", [])
-        if dependents:
-            lines.append("**Important internal dependents**")
-            for item in dependents:
-                lines.append(f"- `{item}`")
-            lines.append("")
-
-        why = s.get("why_central", "")
-        if why:
-            lines.append(f"**Why central:** {why}")
-            lines.append("")
-
-        risks = s.get("risk_notes", [])
-        if risks:
-            lines.append("**Risk notes**")
-            for item in risks:
-                lines.append(f"- {item}")
-            lines.append("")
-
-        lines.append(f"**Confidence:** {s.get('confidence', 'unknown')}")
-        lines.append("")
-
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-    description="Generate LLM summaries for high in-degree internal files."
-    )
-    parser.add_argument("repo_path", help="Path to repo to analyze")
-    parser.add_argument(
-    "--model",
-    default=DEFAULT_MODEL,
-    help=f"OpenAI model to use (default: {DEFAULT_MODEL})",
-    )
-    parser.add_argument(
-    "--top-k",
-    type=int,
-    default=10,
-    help="Number of high in-degree internal files to summarize",
-    )
-    parser.add_argument(
-    "--min-in-degree",
-    type=int,
-    default=1,
-    help="Minimum in-degree required to summarize a file",
-    )
-    parser.add_argument(
-    "--json-out",
-    default="high_innode_summaries.json",
-    help="Path to JSON output file",
-    )
-    parser.add_argument(
-    "--md-out",
-    default="high_innode_summaries.md",
-    help="Path to Markdown output file",
-    )
     args = parser.parse_args()
 
-    if not os.path.isdir(args.repo_path):
-        print(f"Error: '{args.repo_path}' is not a directory.", file=sys.stderr)
-        sys.exit(1)
+    result = summarize_repo(args.repo_path)
 
-    result = summarize_repo(
-        args.repo_path,
-        model=args.model,
-        top_k=args.top_k,
-        min_in_degree=args.min_in_degree,
-    )
-
-    with open(args.json_out, "w", encoding="utf-8") as f:
+    with open(args.out, "w") as f:
         json.dump(result, f, indent=2)
 
-    write_markdown_report(result, args.md_out)
+    print("Done. Enhanced summaries saved.")
 
-    print(f"Wrote JSON summaries to: {args.json_out}")
-    print(f"Wrote Markdown report to: {args.md_out}")
 
 if __name__ == "__main__":
     main()
