@@ -85,10 +85,8 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> d
     if use_llm:
         try:
             from llm_summaries import summarize_repo
-            llm_result = summarize_repo(
-                repo_path, model="gpt-5-mini", top_k=5, min_in_degree=1,
-            )
-            llm_summaries = llm_result.get("summaries", [])
+            llm_result = summarize_repo(repo_path)
+            llm_summaries = llm_result if isinstance(llm_result, list) else llm_result.get("summaries", [])
         except Exception as exc:
             print(f"Warning: LLM summaries failed: {exc}", file=sys.stderr)
 
