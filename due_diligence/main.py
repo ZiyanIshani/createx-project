@@ -11,7 +11,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
+from urllib.parse import urlparse
 
 # Allow running from the due_diligence directory directly
 sys.path.insert(0, os.path.dirname(__file__))
@@ -28,6 +32,30 @@ from static_analysis.dep_graph import (
     compute_metrics,
 )
 from static_analysis.graph_viz import render_contributor_file_graph
+
+
+def _looks_like_git_url(value: str) -> bool:
+    """Best-effort check for common git URL formats."""
+    if value.startswith(("http://", "https://", "git@")):
+        return True
+    parsed = urlparse(value)
+    return bool(parsed.scheme and parsed.netloc)
+
+
+def _clone_repo_to_temp(repo_url: str) -> str:
+    """
+    Clone `repo_url` into a temporary directory and return the local path.
+    Raises RuntimeError on clone failure.
+    """
+    temp_root = tempfile.mkdtemp(prefix="due-diligence-")
+    dest = os.path.join(temp_root, "repo")
+    cmd = ["git", "clone", "--depth", "1", repo_url, dest]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        shutil.rmtree(temp_root, ignore_errors=True)
+        raise RuntimeError(stderr or f"Failed to clone repository: {repo_url}")
+    return dest
 
 
 def _run_pipeline(repo_path: str, ref: str = "HEAD") -> dict:
@@ -176,11 +204,25 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not os.path.isdir(args.repo_path):
+    # Accept both local paths and remote git URLs in repo_path.
+    pipeline_repo_path = args.repo_path
+    cleanup_root: str | None = None
+    if _looks_like_git_url(args.repo_path):
+        try:
+            pipeline_repo_path = _clone_repo_to_temp(args.repo_path)
+            cleanup_root = os.path.dirname(pipeline_repo_path)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif not os.path.isdir(args.repo_path):
         print(f"Error: '{args.repo_path}' is not a directory.", file=sys.stderr)
         sys.exit(1)
 
-    result = _run_pipeline(args.repo_path, ref=args.ref)
+    try:
+        result = _run_pipeline(pipeline_repo_path, ref=args.ref)
+    finally:
+        if cleanup_root is not None:
+            shutil.rmtree(cleanup_root, ignore_errors=True)
 
     if args.output == "pretty":
         _print_pretty(result)

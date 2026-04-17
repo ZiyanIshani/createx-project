@@ -32,11 +32,11 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python main.py <repo_path> [--ref HEAD] [--output json|pretty]
+python main.py <repo_path_or_git_url> [--ref HEAD] [--output json|pretty]
 ```
 
 **Arguments:**
-- `repo_path` — path to the git repository to analyze
+- `repo_path_or_git_url` — local path to a git repo, or a git URL (HTTPS/SSH)
 - `--ref` — git ref to analyze (default: `HEAD`)
 - `--output` — `json` (default) or `pretty` for a human-readable report
 
@@ -45,6 +45,9 @@ python main.py <repo_path> [--ref HEAD] [--output json|pretty]
 ```bash
 # JSON output (pipe-friendly)
 python main.py /path/to/repo
+
+# Analyze a remote repository URL
+python main.py https://github.com/org/repo.git
 
 # Human-readable report
 python main.py /path/to/repo --output pretty
