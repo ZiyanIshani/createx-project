@@ -80,6 +80,8 @@ def dashboard():
             _llm_summaries = None  # mark as pending
             t = threading.Thread(target=_run_llm_in_background, args=(_repo_path,), daemon=True)
             t.start()
+    with _llm_lock:
+        current_summaries = _llm_summaries  # snapshot under lock
     return render_template(
         "dashboard.html",
         data=_result,
@@ -87,6 +89,7 @@ def dashboard():
         repo_url=_repo_url,
         bus_data=_result.get("bus_data", {}),
         use_llm=_use_llm,
+        llm_summaries=current_summaries,  # None = still running, list = done
     )
 
 
