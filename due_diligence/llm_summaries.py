@@ -206,6 +206,7 @@ def summarize_repo(repo_path):
         }
 
         summary = summarize_file_with_llm(file_data)
+        summary["file"] = file_path  # guarantee file key is always present
 
         results.append(summary)
 
