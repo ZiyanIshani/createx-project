@@ -128,6 +128,36 @@ Python, JavaScript, TypeScript, Java, Go, Rust, C, C++, C#, Ruby, PHP, Swift, Ko
 
 AST-level import parsing is supported for: Python, JavaScript/TypeScript, Java, Go, Rust.
 
+## Web Dashboard
+
+Instead of terminal output, you can view the report as an interactive web dashboard.
+
+### Running
+
+```bash
+cd due_diligence
+python server.py <path-to-repo>
+```
+
+To analyze this repo itself:
+
+```bash
+cd due_diligence
+python server.py ..
+```
+
+Then open **http://localhost:8080** in your browser.
+
+**Options:**
+- `--port` — change the port (default: `8080`). macOS reserves port 5000 for AirPlay, so avoid that one.
+- `--ref` — analyze a specific git ref (default: `HEAD`)
+
+```bash
+python server.py /path/to/repo --port 9000 --ref main
+```
+
+The dashboard displays language breakdown, top contributors with activity status, bus factor risk, dependency graph metrics, architectural risk score, and a contributor ↔ file ownership graph. Click **Re-run** in the top-right to re-analyze without restarting the server.
+
 ## Running Tests
 
 ```bash
