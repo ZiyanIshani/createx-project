@@ -16,7 +16,7 @@ from static_analysis.dep_graph import build_dep_graph
 
 
 MAX_FILE_CHARS = 8000
-DEFAULT_MODEL = "llama3"
+DEFAULT_MODEL = "gemma3:1b"
 
 
 # ------------------------
