@@ -12,6 +12,7 @@ import argparse
 import os
 import subprocess
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -28,6 +29,23 @@ _use_llm: bool = False
 _result: dict | None = None
 _repo_name: str = ""
 _repo_url: str = ""
+
+# LLM summary state — computed in background
+_llm_summaries: list | None = None   # None = not done yet, [] = done but empty
+_llm_lock = threading.Lock()
+
+
+def _run_llm_in_background(repo_path: str) -> None:
+    global _llm_summaries
+    try:
+        from llm_summaries import summarize_repo
+        result = summarize_repo(repo_path)
+        summaries = result if isinstance(result, list) else result.get("summaries", [])
+    except Exception as exc:
+        print(f"Warning: LLM summaries failed: {exc}", file=sys.stderr)
+        summaries = []
+    with _llm_lock:
+        _llm_summaries = summaries
 
 
 def _get_repo_info(repo_path: str) -> tuple[str, str]:
@@ -53,16 +71,32 @@ def _get_repo_info(repo_path: str) -> tuple[str, str]:
 
 @app.route("/")
 def dashboard():
-    global _result
+    global _result, _llm_summaries
     if _result is None:
-        _result = _run_pipeline(_repo_path, ref=_ref, use_llm=_use_llm)
+        # Run fast pipeline (no LLM) so the page loads immediately
+        _result = _run_pipeline(_repo_path, ref=_ref, use_llm=False)
+        # Kick off LLM in background if enabled
+        if _use_llm:
+            _llm_summaries = None  # mark as pending
+            t = threading.Thread(target=_run_llm_in_background, args=(_repo_path,), daemon=True)
+            t.start()
     return render_template(
         "dashboard.html",
         data=_result,
         repo_name=_repo_name,
         repo_url=_repo_url,
         bus_data=_result.get("bus_data", {}),
+        use_llm=_use_llm,
     )
+
+
+@app.route("/llm-data")
+def llm_data():
+    """Polled by the dashboard to check if LLM summaries are ready."""
+    with _llm_lock:
+        if _llm_summaries is None:
+            return jsonify({"status": "pending"})
+        return jsonify({"status": "done", "summaries": _llm_summaries})
 
 
 @app.route("/graph-data")
@@ -116,8 +150,9 @@ def no_cache(response):
 
 @app.route("/refresh")
 def refresh():
-    global _result
-    _result = _run_pipeline(_repo_path, ref=_ref, use_llm=_use_llm)
+    global _result, _llm_summaries
+    _result = None
+    _llm_summaries = None
     from flask import redirect, url_for
     return redirect(url_for("dashboard"))
 

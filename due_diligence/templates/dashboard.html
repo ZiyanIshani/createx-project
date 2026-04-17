@@ -373,59 +373,20 @@
       </div>
     </div>
 
-    <!-- LLM Summaries (only if available) -->
-    {% if data.llm_summaries %}
-    <div class="card p-6 mb-6">
+    <!-- LLM Summaries (async, only if --llm was passed) -->
+    {% if use_llm %}
+    <div class="card p-6 mb-6" id="llm-section">
       <div class="section-title">AI File Summaries</div>
-      <p class="section-desc">LLM-generated summaries for the most central internal files (highest in-degree). These are the files that would cause the most damage if modified incorrectly.</p>
-      <div class="space-y-4">
-        {% for s in data.llm_summaries %}
-        <details class="bg-[#141620] border border-[#2d3148] rounded-lg">
-          <summary class="p-4 flex justify-between items-center">
-            <span class="font-mono text-sm text-indigo-300">{{ s.file }}</span>
-          </summary>
-          <div class="px-4 pb-4 space-y-3">
-            {% if s.role %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Role</div>
-              <p class="text-sm text-gray-300">{{ s.role }}</p>
-            </div>
-            {% endif %}
-            {% if s.quality_summary %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Code Quality</div>
-              <p class="text-sm text-gray-400">{{ s.quality_summary }}</p>
-            </div>
-            {% endif %}
-            {% if s.ownership_summary %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Ownership</div>
-              <p class="text-sm text-gray-400">{{ s.ownership_summary }}</p>
-            </div>
-            {% endif %}
-            {% if s.compatibility_summary %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Compatibility</div>
-              <p class="text-sm text-gray-400">{{ s.compatibility_summary }}</p>
-            </div>
-            {% endif %}
-            {% if s.possible_provenance_flags %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Provenance Flags</div>
-              <ul class="text-sm text-orange-300/80 list-disc list-inside">
-                {% for f in s.possible_provenance_flags %}<li>{{ f }}</li>{% endfor %}
-              </ul>
-            </div>
-            {% endif %}
-            {% if s.raw_output %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Raw Output</div>
-              <p class="text-xs text-gray-500 font-mono">{{ s.raw_output[:500] }}</p>
-            </div>
-            {% endif %}
-          </div>
-        </details>
-        {% endfor %}
+      <p class="section-desc">LLM-generated summaries for the most central internal files (highest in-degree). Generated in the background using Ollama — results appear automatically when ready.</p>
+      <div id="llm-body">
+        <!-- Spinner shown while pending -->
+        <div id="llm-spinner" class="flex items-center gap-3 py-4">
+          <svg class="animate-spin h-5 w-5 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+          </svg>
+          <span class="text-sm text-gray-400">Analysing key files with <span class="text-indigo-400 font-mono">gemma3:1b</span> — this usually takes 1–2 minutes…</span>
+        </div>
       </div>
     </div>
     {% endif %}
@@ -892,6 +853,46 @@
       document.getElementById('btn-commits').className = `text-xs px-3 py-1 rounded-md border border-indigo-500 font-semibold transition-colors ${isCommits ? 'bg-indigo-500 text-white' : 'text-indigo-400 hover:bg-indigo-500 hover:text-white'}`;
       document.getElementById('btn-lines').className = `text-xs px-3 py-1 rounded-md border border-indigo-500 font-semibold transition-colors ${!isCommits ? 'bg-indigo-500 text-white' : 'text-indigo-400 hover:bg-indigo-500 hover:text-white'}`;
     }
+    // ── Async LLM summaries polling ──
+    {% if use_llm %}
+    (function() {
+      function renderSummaries(summaries) {
+        const body = document.getElementById('llm-body');
+        if (!summaries.length) {
+          body.innerHTML = '<p class="text-sm text-gray-500">No summaries generated.</p>';
+          return;
+        }
+        body.innerHTML = '<div class="space-y-4">' + summaries.map(s => `
+          <details class="bg-[#141620] border border-[#2d3148] rounded-lg">
+            <summary class="p-4 flex justify-between items-center cursor-pointer">
+              <span class="font-mono text-sm text-indigo-300">${s.file || ''}</span>
+            </summary>
+            <div class="px-4 pb-4 space-y-3">
+              ${s.role ? `<div><div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Role</div><p class="text-sm text-gray-300">${s.role}</p></div>` : ''}
+              ${s.quality_summary ? `<div><div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Code Quality</div><p class="text-sm text-gray-400">${s.quality_summary}</p></div>` : ''}
+              ${s.ownership_summary ? `<div><div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Ownership</div><p class="text-sm text-gray-400">${s.ownership_summary}</p></div>` : ''}
+              ${s.compatibility_summary ? `<div><div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Compatibility</div><p class="text-sm text-gray-400">${s.compatibility_summary}</p></div>` : ''}
+              ${s.possible_provenance_flags && s.possible_provenance_flags.length ? `<div><div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Provenance Flags</div><ul class="text-sm text-orange-300/80 list-disc list-inside">${s.possible_provenance_flags.map(f => `<li>${f}</li>`).join('')}</ul></div>` : ''}
+              ${s.raw_output ? `<div><div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Raw Output</div><p class="text-xs text-gray-500 font-mono">${s.raw_output.slice(0,500)}</p></div>` : ''}
+            </div>
+          </details>`).join('') + '</div>';
+      }
+
+      function poll() {
+        fetch('/llm-data')
+          .then(r => r.json())
+          .then(d => {
+            if (d.status === 'done') {
+              renderSummaries(d.summaries);
+            } else {
+              setTimeout(poll, 3000);
+            }
+          })
+          .catch(() => setTimeout(poll, 5000));
+      }
+      poll();
+    })();
+    {% endif %}
   </script>
 </body>
 </html>
