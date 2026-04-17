@@ -23,8 +23,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 from repo_ingestion.file_tree import language_breakdown
 from repo_ingestion.git_stats import (
     bus_factor_data,
+    commit_velocity,
     commits_per_email,
     contributor_recency_score,
+    contributor_timeline,
+    lines_per_contributor,
 )
 from static_analysis.dep_graph import (
     architectural_risk_score,
@@ -32,6 +35,7 @@ from static_analysis.dep_graph import (
     compute_metrics,
 )
 from static_analysis.graph_viz import render_contributor_file_graph
+from static_analysis.test_coverage import compute_test_coverage
 
 
 def _looks_like_git_url(value: str) -> bool:
@@ -58,12 +62,13 @@ def _clone_repo_to_temp(repo_url: str) -> str:
     return dest
 
 
-def _run_pipeline(repo_path: str, ref: str = "HEAD") -> dict:
+def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> dict:
     # --- Step 1: Repository Ingestion ---
     languages = language_breakdown(repo_path)
 
     raw_contributors = commits_per_email(repo_path, ref=ref)
     augmented = contributor_recency_score(raw_contributors, repo_path=repo_path, ref=ref)
+    lines_by_email = lines_per_contributor(repo_path, ref=ref)
 
     top_contributors = [
         {
@@ -72,22 +77,24 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD") -> dict:
             "email": email,
             "last_commit_ts": last_ts,
             "recency_score": recency,
+            "lines_added": lines_by_email.get(email, 0),
         }
         for count, name, email, last_ts, recency in augmented[:10]
     ]
 
     bus_data = bus_factor_data(repo_path, ref=ref)
-    # Files with only one unique contributor = highest bus factor risk
     single_contributor_files = {
         path: emails
         for path, emails in bus_data.items()
         if len(emails) == 1
     }
-    # Sort by contributor recency (proxy: sort descending by email alphabetically if no ts)
     bus_factor_risk = [
         {"file": path, "sole_contributor": emails[0]}
         for path, emails in list(single_contributor_files.items())[:10]
     ]
+
+    velocity = commit_velocity(repo_path, ref=ref)
+    timeline = contributor_timeline(repo_path, ref=ref)
 
     # --- Generate contributor ↔ file graph image ---
     images_dir = os.path.join(os.path.abspath(repo_path), "images")
@@ -98,13 +105,33 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD") -> dict:
     metrics = compute_metrics(graph)
     arch_risk = architectural_risk_score(metrics)
 
+    # --- Step 3: Test Coverage ---
+    test_cov = compute_test_coverage(repo_path, dep_graph=graph)
+
+    # --- Step 4: LLM Summaries (optional) ---
+    llm_summaries: list = []
+    if use_llm:
+        try:
+            from llm_summaries import summarize_repo
+            llm_result = summarize_repo(
+                repo_path, model="gpt-5-mini", top_k=5, min_in_degree=1,
+            )
+            llm_summaries = llm_result.get("summaries", [])
+        except Exception as exc:
+            print(f"Warning: LLM summaries failed: {exc}", file=sys.stderr)
+
     return {
         "repo_path": os.path.abspath(repo_path),
         "languages": languages,
         "contributors": top_contributors,
         "bus_factor_risk": bus_factor_risk,
+        "commit_velocity": velocity,
+        "contributor_timeline": timeline,
+        "bus_data": bus_data,
         "dep_graph_metrics": metrics,
         "architectural_risk": arch_risk,
+        "test_coverage": test_cov,
+        "llm_summaries": llm_summaries,
         "contributor_file_graph": graph_image_path,
     }
 
@@ -138,6 +165,24 @@ def _print_pretty(result: dict) -> None:
         )
     print()
 
+    # Commit velocity
+    vel = result.get("commit_velocity", {})
+    if vel.get("total_commits"):
+        print("COMMIT VELOCITY")
+        print(sep)
+        print(f"  Total commits:    {vel['total_commits']}")
+        print(f"  First commit:     {vel['first_commit_date']}")
+        print(f"  Last commit:      {vel['last_commit_date']}")
+        months = vel.get("months", [])
+        cpm = vel.get("commits_per_month", [])
+        if months:
+            avg = sum(cpm) / len(cpm)
+            print(f"  Months spanned:   {len(months)}")
+            print(f"  Avg commits/mo:   {avg:.1f}")
+            recent = cpm[-3:] if len(cpm) >= 3 else cpm
+            print(f"  Last {len(recent)} months:     {recent}")
+        print()
+
     # Bus factor risk
     print("BUS FACTOR RISK (files with single contributor)")
     print(sep)
@@ -147,6 +192,22 @@ def _print_pretty(result: dict) -> None:
     else:
         print("  None detected.")
     print()
+
+    # Test coverage
+    tc = result.get("test_coverage", {})
+    if tc:
+        print("TEST COVERAGE")
+        print(sep)
+        print(f"  Test files:         {tc.get('test_file_count', 0)}")
+        print(f"  Source files:       {tc.get('source_file_count', 0)}")
+        print(f"  Test:source ratio:  {tc.get('test_to_source_ratio', 0):.2f}")
+        print(f"  Coverage estimate:  {tc.get('coverage_percent', 0):.1f}%")
+        untested = tc.get("untested_files", [])
+        if untested:
+            print(f"\n  Untested modules ({len(untested)} shown):")
+            for f in untested[:10]:
+                print(f"    {f}")
+        print()
 
     # Dependency graph metrics
     m = result["dep_graph_metrics"]
@@ -182,6 +243,20 @@ def _print_pretty(result: dict) -> None:
         print(f"    • {reason}")
     print()
 
+    # LLM summaries
+    llm = result.get("llm_summaries", [])
+    if llm:
+        print("LLM FILE SUMMARIES")
+        print(sep)
+        for s in llm:
+            print(f"\n  {s.get('file', '?')}")
+            print(f"  Role: {s.get('role', 'N/A')}")
+            risks = s.get("risk_notes", [])
+            if risks:
+                for r in risks:
+                    print(f"    ⚠ {r}")
+        print()
+
     # Graph image
     if result.get("contributor_file_graph"):
         print("CONTRIBUTOR ↔ FILE GRAPH")
@@ -202,6 +277,11 @@ def main() -> None:
         default="json",
         help="Output format (default: json).",
     )
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Generate LLM summaries for high-centrality files (requires OPENAI_API_KEY).",
+    )
     args = parser.parse_args()
 
     # Accept both local paths and remote git URLs in repo_path.
@@ -219,7 +299,7 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        result = _run_pipeline(pipeline_repo_path, ref=args.ref)
+        result = _run_pipeline(pipeline_repo_path, ref=args.ref, use_llm=args.llm)
     finally:
         if cleanup_root is not None:
             shutil.rmtree(cleanup_root, ignore_errors=True)

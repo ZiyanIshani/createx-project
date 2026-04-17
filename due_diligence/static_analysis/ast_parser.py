@@ -30,6 +30,7 @@ _LANG_MAP: Dict[str, str] = {
     "Java": "java",
     "Go": "go",
     "Rust": "rust",
+    "C": "c",
 }
 
 
@@ -100,6 +101,10 @@ _IMPORT_QUERIES: Dict[str, str] = {
         (use_declaration
             argument: (_) @path)
     """,
+    "c": """
+        (preproc_include
+            path: (_) @path)
+    """,
 }
 
 _CALL_QUERIES: Dict[str, str] = {
@@ -151,6 +156,10 @@ _CALL_QUERIES: Dict[str, str] = {
                     value: (_) @obj
                     field: (field_identifier) @attr)
             ])
+    """,
+    "c": """
+        (call_expression
+            function: (identifier) @name)
     """,
 }
 
@@ -212,8 +221,12 @@ def parse_imports(file_path: str, language: str) -> List[str]:
             text = _node_text(node, src)
 
             if cname in ("module", "path"):
-                # Python dotted_name / relative_import, Java scoped_identifier, Rust path, Go path
-                clean = _strip_quotes(text).replace(" ", "")
+                # Python dotted_name / relative_import, Java scoped_identifier, Rust/Go/C path
+                if ts_name == "c":
+                    # For C includes we may see <stdio.h> or "foo.h"
+                    clean = text.strip("\"'`<>").replace(" ", "")
+                else:
+                    clean = _strip_quotes(text).replace(" ", "")
                 if clean:
                     imports.append(clean)
 
