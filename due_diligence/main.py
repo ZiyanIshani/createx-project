@@ -34,7 +34,14 @@ from static_analysis.graph_viz import render_contributor_file_graph
 from static_analysis.test_coverage import compute_test_coverage
 
 
-def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> dict:
+def _run_pipeline(
+    repo_path: str,
+    ref: str = "HEAD",
+    use_llm: bool = False,
+    standards_path: str | None = None,
+    model: str = "mistral",
+    ollama_url: str = "http://localhost:11434",
+) -> dict:
     # --- Step 1: Repository Ingestion ---
     languages = language_breakdown(repo_path)
 
@@ -80,17 +87,71 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> d
     # --- Step 3: Test Coverage ---
     test_cov = compute_test_coverage(repo_path, dep_graph=graph)
 
-    # --- Step 4: LLM Summaries (optional) ---
+    # --- Step 4: LLM Agentic Analysis (optional) ---
     llm_summaries: list = []
+    llm_analysis: dict = {}
+
     if use_llm:
-        try:
-            from llm_summaries import summarize_repo
-            llm_result = summarize_repo(
-                repo_path, model="gpt-5-mini", top_k=5, min_in_degree=1,
+        from llm.client import OllamaClient, OllamaConnectionError
+        from llm.agents.authorship import AuthorshipAgent
+        from llm.agents.provenance import ProvenanceAgent
+        from llm.agents.quality import QualityAgent
+
+        client = OllamaClient(base_url=ollama_url, model=model)
+
+        if not client.is_available():
+            print(
+                f"Warning: Ollama not available at {ollama_url}. Skipping LLM analysis.",
+                file=sys.stderr,
             )
-            llm_summaries = llm_result.get("summaries", [])
-        except Exception as exc:
-            print(f"Warning: LLM summaries failed: {exc}", file=sys.stderr)
+            llm_analysis = {"error": f"Ollama not available at {ollama_url}"}
+        else:
+            # Identify critical files: union of fragile + single-contributor, cap at 10
+            fragile_files = metrics.get("fragile_files", [])
+            fragile_paths = {e["file"] for e in fragile_files}
+            single_contrib_paths = set(single_contributor_files.keys())
+            critical_paths = list(fragile_paths | single_contrib_paths)[:10]
+
+            # Build per-file language map from languages summary
+            per_file_languages: dict[str, str] = {}
+            try:
+                from repo_ingestion.file_tree import walk_repo
+                for fpath, lang in walk_repo(repo_path):
+                    rel = os.path.relpath(fpath, repo_path)
+                    per_file_languages[rel] = lang
+            except Exception:
+                pass
+
+            # Build contributor recency map
+            contributor_recency_map = {
+                c["email"]: c["recency_score"] for c in top_contributors
+            }
+
+            # Authorship
+            auth_agent = AuthorshipAgent(client)
+            authorship_results = auth_agent.analyze_critical_files(
+                metrics, bus_data, contributor_recency_map, top_n=5
+            )
+
+            # Provenance
+            prov_agent = ProvenanceAgent(client)
+            provenance_results = prov_agent.scan_files(
+                critical_paths, repo_path, per_file_languages
+            )
+
+            # Quality
+            quality_agent = QualityAgent(client)
+            critical_fragile = [e for e in fragile_files if e["file"] in set(critical_paths)]
+            quality_results = quality_agent.analyze_critical_files(
+                critical_fragile, repo_path, per_file_languages, standards_path
+            )
+
+            llm_analysis = {
+                "model": model,
+                "authorship": authorship_results,
+                "provenance": provenance_results,
+                "quality": quality_results,
+            }
 
     return {
         "repo_path": os.path.abspath(repo_path),
@@ -104,6 +165,7 @@ def _run_pipeline(repo_path: str, ref: str = "HEAD", use_llm: bool = False) -> d
         "architectural_risk": arch_risk,
         "test_coverage": test_cov,
         "llm_summaries": llm_summaries,
+        "llm_analysis": llm_analysis,
         "contributor_file_graph": graph_image_path,
     }
 
@@ -215,18 +277,47 @@ def _print_pretty(result: dict) -> None:
         print(f"    • {reason}")
     print()
 
-    # LLM summaries
-    llm = result.get("llm_summaries", [])
-    if llm:
-        print("LLM FILE SUMMARIES")
+    # LLM Agentic Analysis
+    llm_a = result.get("llm_analysis", {})
+    if llm_a and "error" not in llm_a:
+        print(f"LLM ANALYSIS  (model: {llm_a.get('model', 'unknown')})")
         print(sep)
-        for s in llm:
-            print(f"\n  {s.get('file', '?')}")
-            print(f"  Role: {s.get('role', 'N/A')}")
-            risks = s.get("risk_notes", [])
-            if risks:
-                for r in risks:
-                    print(f"    ⚠ {r}")
+
+        authorship = llm_a.get("authorship", [])
+        if authorship:
+            print("\n  AUTHORSHIP RISK")
+            for entry in authorship:
+                print(
+                    f"    [{entry.get('risk_level', '?').upper():8s}] "
+                    f"{entry.get('file', '?'):<40} "
+                    f"{entry.get('risk_summary', '')[:80]}"
+                )
+
+        provenance = llm_a.get("provenance", [])
+        if provenance:
+            print("\n  PROVENANCE RISK")
+            for entry in provenance:
+                ev_count = len(entry.get("evidence", []))
+                print(
+                    f"    [{entry.get('provenance_risk', '?').upper():6s}] "
+                    f"{entry.get('file', '?'):<40} "
+                    f"{ev_count} evidence item(s)"
+                )
+
+        quality = llm_a.get("quality", [])
+        if quality:
+            print("\n  CODE QUALITY")
+            for entry in quality:
+                print(
+                    f"    [Grade {entry.get('overall_grade', '?')}] "
+                    f"{entry.get('file', '?'):<40} "
+                    f"{entry.get('violation_count', 0)} violation(s)"
+                )
+        print()
+    elif llm_a.get("error"):
+        print("LLM ANALYSIS")
+        print(sep)
+        print(f"  {llm_a['error']}")
         print()
 
     # Graph image
@@ -252,7 +343,23 @@ def main() -> None:
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Generate LLM summaries for high-centrality files (requires OPENAI_API_KEY).",
+        help="Enable LLM agentic analysis via Ollama (off by default).",
+    )
+    parser.add_argument(
+        "--standards",
+        default=None,
+        metavar="PATH",
+        help="Path to a coding standards file (markdown or text).",
+    )
+    parser.add_argument(
+        "--model",
+        default="mistral",
+        help="Ollama model name (default: mistral).",
+    )
+    parser.add_argument(
+        "--ollama-url",
+        default="http://localhost:11434",
+        help="Ollama base URL (default: http://localhost:11434).",
     )
     args = parser.parse_args()
 
@@ -260,7 +367,14 @@ def main() -> None:
         print(f"Error: '{args.repo_path}' is not a directory.", file=sys.stderr)
         sys.exit(1)
 
-    result = _run_pipeline(args.repo_path, ref=args.ref, use_llm=args.llm)
+    result = _run_pipeline(
+        args.repo_path,
+        ref=args.ref,
+        use_llm=args.llm,
+        standards_path=args.standards,
+        model=args.model,
+        ollama_url=args.ollama_url,
+    )
 
     if args.output == "pretty":
         _print_pretty(result)

@@ -1,10 +1,10 @@
 # AI-Powered Technical Due Diligence
 
-Automated technical due diligence for M&A transactions targeting the middle market (deals under $100M). Analyzes software repositories and produces risk reports covering contributor continuity, architectural fragility, and technical debt — fully offline, no LLM required.
+Automated technical due diligence for M&A transactions targeting the middle market (deals under $100M). Analyzes software repositories and produces risk reports covering contributor continuity, architectural fragility, code provenance, and technical debt — fully offline, optionally powered by a local LLM.
 
 ## What It Does
 
-The pipeline runs two stages against any local git repository:
+The pipeline runs in up to three stages against any local git repository:
 
 **Step 1 — Repository Ingestion**
 - Contributor statistics: commit counts, activity timelines, recency scoring
@@ -17,6 +17,13 @@ The pipeline runs two stages against any local git repository:
 - Risk metrics: circular dependencies, fragile hubs, orphaned files, external package exposure
 - Architectural risk score (0–10)
 
+**Step 3 — LLM Agentic Analysis** *(optional, requires Ollama)*
+- **Authorship risk**: who wrote the critical files and are they still around?
+- **Provenance risk**: does any code look copy-pasted from online sources?
+- **Code quality**: does the code meet your coding standards?
+
+The LLM stage uses a hand-rolled ReAct agent loop (Reason → Act → Observe) against a locally-running Ollama instance. No cloud APIs, no LLM framework dependencies.
+
 ## Installation
 
 ```bash
@@ -28,26 +35,56 @@ pip install -r requirements.txt
 - `networkx>=3.0` — dependency graph construction and analysis
 - `tree-sitter>=0.21.0,<0.22.0` — AST parsing
 - `tree-sitter-languages>=1.10.0` — pre-built language grammars
+- `requests>=2.31.0` — HTTP calls to Ollama (LLM stage only)
+
+## Ollama Setup (for LLM analysis)
+
+```bash
+# Install ollama (macOS)
+brew install ollama
+
+# Pull the default model
+ollama pull mistral
+
+# Start the server (runs on port 11434)
+ollama serve
+
+# Verify it's running
+curl http://localhost:11434/api/tags
+```
 
 ## Usage
 
 ```bash
-python main.py <repo_path> [--ref HEAD] [--output json|pretty]
+python main.py <repo_path> [--ref HEAD] [--output json|pretty] [--llm] [--standards PATH] [--model NAME] [--ollama-url URL]
 ```
 
 **Arguments:**
 - `repo_path` — path to the git repository to analyze
 - `--ref` — git ref to analyze (default: `HEAD`)
 - `--output` — `json` (default) or `pretty` for a human-readable report
+- `--llm` — enable LLM agentic analysis (off by default; requires Ollama running)
+- `--standards` — path to a coding standards file (markdown or plain text)
+- `--model` — Ollama model name (default: `mistral`)
+- `--ollama-url` — Ollama base URL (default: `http://localhost:11434`)
 
 **Examples:**
 
 ```bash
-# JSON output (pipe-friendly)
+# JSON output (pipe-friendly), no LLM
 python main.py /path/to/repo
 
-# Human-readable report
+# Human-readable report, no LLM
 python main.py /path/to/repo --output pretty
+
+# Full analysis with LLM (default model: mistral)
+python main.py /path/to/repo --llm --output pretty
+
+# With a custom coding standards file
+python main.py /path/to/repo --llm --standards standards/my_standards.md --output pretty
+
+# With a different model
+python main.py /path/to/repo --llm --model codestral --output pretty
 
 # Analyze a specific branch or tag
 python main.py /path/to/repo --ref main --output pretty
@@ -90,7 +127,41 @@ python main.py /path/to/repo --ref main --output pretty
   },
   "architectural_risk": {
     "score": 4,
-    "reasons": ["1 circular dependency group detected", "High hub concentration: max in-degree 8 in a 19-file repo"]
+    "reasons": ["1 circular dependency group detected"]
+  },
+  "llm_analysis": {
+    "model": "mistral",
+    "authorship": [
+      {
+        "file": "src/core/auth.py",
+        "contributor_count": 1,
+        "risk_level": "critical",
+        "risk_summary": "Sole contributor is inactive. Critical knowledge loss risk.",
+        "contributors": [
+          { "email": "bob@example.com", "recency_score": 0.0, "recency_label": "inactive" }
+        ]
+      }
+    ],
+    "provenance": [
+      {
+        "file": "src/utils.py",
+        "provenance_risk": "medium",
+        "evidence": ["URL found in comment", "Generic placeholder names found"],
+        "suspicious_sections": [{ "start_line": 12, "end_line": 25, "reason": "style shift" }]
+      }
+    ],
+    "quality": [
+      {
+        "file": "src/utils.py",
+        "language": "Python",
+        "overall_grade": "C",
+        "violation_count": 4,
+        "violations": [
+          { "line": 18, "severity": "error", "rule": "bare_except", "description": "Bare except clause" }
+        ],
+        "summary": "Several violations found. Missing docstrings and bare excepts."
+      }
+    ]
   }
 }
 ```
@@ -103,23 +174,64 @@ python main.py /path/to/repo --ref main --output pretty
 | `0.5` | Last commit 6–18 months ago — semi-active |
 | `0.0` | Last commit older than 18 months — inactive |
 
+### Authorship risk levels
+
+| Level | Meaning |
+|-------|---------|
+| `low` | Multiple active contributors |
+| `medium` | Few contributors or mixed activity |
+| `high` | All contributors semi-active or inactive |
+| `critical` | Sole contributor is inactive (knowledge loss risk) |
+
+### Quality grades
+
+| Grade | Error count (errors + 0.5 × warnings) |
+|-------|---------------------------------------|
+| A | 0 |
+| B | 1–2 |
+| C | 3–5 |
+| D | 6–10 |
+| F | 11+ |
+
+## Coding Standards
+
+Place custom standards files in the `standards/` directory (markdown or plain text). Pass the path with `--standards`:
+
+```bash
+python main.py /path/to/repo --llm --standards standards/my_standards.md --output pretty
+```
+
+If no standards file is provided, the agent applies built-in defaults: max 50-line functions, docstring requirements, no bare `except` clauses, no magic numbers, consistent naming conventions.
+
 ## Project Structure
 
 ```
 due_diligence/
 ├── main.py                          # CLI entrypoint
 ├── requirements.txt
+├── standards/                       # user coding standards files go here
 ├── repo_ingestion/
 │   ├── git_stats.py                 # contributor stats, timeline, bus factor
 │   └── file_tree.py                 # file discovery, language detection
 ├── static_analysis/
 │   ├── ast_parser.py                # tree-sitter parsing → imports + calls
 │   └── dep_graph.py                 # NetworkX graph construction + metrics
+├── llm/
+│   ├── client.py                    # OllamaClient — raw HTTP wrapper (no openai SDK)
+│   ├── prompts.py                   # all prompt templates as string constants
+│   └── agents/
+│       ├── __init__.py              # AgentLoopMixin — shared ReAct loop
+│       ├── authorship.py            # AuthorshipAgent
+│       ├── provenance.py            # ProvenanceAgent
+│       └── quality.py              # QualityAgent
 └── tests/
     ├── test_git_stats.py
     ├── test_file_tree.py
     ├── test_ast_parser.py
-    └── test_dep_graph.py
+    ├── test_dep_graph.py
+    ├── test_authorship.py
+    ├── test_provenance.py
+    └── test_quality.py
 ```
 
 ## Supported Languages
@@ -134,12 +246,13 @@ AST-level import parsing is supported for: Python, JavaScript/TypeScript, Java, 
 pytest tests/
 ```
 
-Tests use real minimal git repositories created via `pygit2` — no mocking of git internals.
+Tests use real minimal git repositories created via `pygit2` — no mocking of git internals. LLM agent tests mock the Ollama client and run entirely offline.
 
 ## Design Constraints
 
-- **No network calls** — fully offline; no API calls of any kind
+- **No network calls** — fully offline by default; Ollama runs locally
 - **No code execution** — never compiles, runs, or installs the target repo's code
-- **No code storage** — does not write source files to disk
-- **Graceful degradation** — handles empty repos, binary files, and parse errors without crashing
-- **Performance** — completes in under 60 seconds for repos up to 50k LOC
+- **No code storage** — file content read for LLM analysis is never written to disk
+- **Graceful degradation** — handles empty repos, binary files, and parse errors without crashing; unavailable Ollama produces a partial result with a warning rather than a crash
+- **Performance** — Steps 1 + 2 complete in under 60 seconds for repos up to 50k LOC
+- **LLM is opt-in** — `--llm` flag required; without it the pipeline runs exactly as before
