@@ -105,11 +105,20 @@ class QualityAgent(AgentLoopMixin):
     def _parse_chunk_result(self, raw) -> dict:
         if isinstance(raw, dict):
             return raw
-        try:
-            result = json.loads(raw) if isinstance(raw, str) else {}
-            return result
-        except (json.JSONDecodeError, TypeError):
-            return {"violations": [], "summary": "", "parse_error": True, "raw": str(raw)}
+        elif isinstance(raw, str):
+            try:
+                result = json.loads(self._clean_json_response(raw))
+                return result
+            except (json.JSONDecodeError, AttributeError):
+                return {
+                    "risk_level": "unknown",
+                    "risk_summary": raw[:300] if raw else "No response from model.",
+                    "violations": [],
+                    "summary": "",
+                    "parse_error": True,
+                }
+        else:
+            return {"risk_level": "unknown", "risk_summary": "No response.", "violations": [], "summary": "", "parse_error": True}
 
     def _deduplicate_violations(self, violations: list[dict]) -> list[dict]:
         """Remove duplicate violations within ±5 lines of each other."""

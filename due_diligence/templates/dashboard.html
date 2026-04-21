@@ -373,6 +373,195 @@
       </div>
     </div>
 
+    <!-- Subscription Services -->
+    <div class="card p-6 mb-6">
+      <div class="section-title">Subscription Services</div>
+      {% if subscriptions and subscriptions.service_count > 0 %}
+      <p class="section-desc">
+        {{ subscriptions.service_count }} external service{{ "s" if subscriptions.service_count != 1 }} detected
+        across {{ subscriptions.services | sum(attribute="reference_count") }} file reference{{ "s" if subscriptions.services | sum(attribute="reference_count") != 1 }}
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th>Category</th>
+            <th>Pricing Tier</th>
+            <th>References</th>
+            <th>Files</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for svc in subscriptions.services %}
+          <tr>
+            <td class="font-medium text-white">{{ svc.service }}</td>
+            <td class="text-gray-400">{{ svc.category }}</td>
+            <td>
+              {% if svc.tier == "pay-as-you-go" %}
+              <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#422006;color:#fbbf24;border:1px solid #92400e;">pay-as-you-go</span>
+              {% elif svc.tier == "subscription" %}
+              <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#450a0a;color:#f87171;border:1px solid #991b1b;">subscription</span>
+              {% elif svc.tier == "freemium" %}
+              <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#052e16;color:#4ade80;border:1px solid #166534;">freemium</span>
+              {% else %}
+              <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#172554;color:#60a5fa;border:1px solid #1e40af;">{{ svc.tier }}</span>
+              {% endif %}
+            </td>
+            <td class="tabular-nums text-gray-300">{{ svc.reference_count }}</td>
+            <td>
+              {% if svc.files %}
+              <details>
+                <summary class="text-xs text-indigo-400 cursor-pointer">{{ svc.files | length }} file{{ "s" if svc.files | length != 1 }}</summary>
+                <div class="mt-1">
+                  {% for f in svc.files %}
+                  <div class="text-xs font-mono text-gray-500 py-0.5">{{ f }}</div>
+                  {% endfor %}
+                </div>
+              </details>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-sm text-green-400">No external subscription services detected.</p>
+      {% endif %}
+    </div>
+
+    <!-- LLM Analysis -->
+    {% if llm_analysis and llm_analysis.get is not defined %}
+    {# fallback for dict access in jinja #}
+    {% endif %}
+    {% if llm_analysis %}
+      {% if "error" in llm_analysis %}
+      <div class="card p-4 mb-6" style="border-color:#854d0e;background:#1c1400;">
+        <span class="text-yellow-300 text-sm">⚠ LLM analysis unavailable: {{ llm_analysis.error }}</span>
+      </div>
+      {% else %}
+      <div class="card p-6 mb-6">
+        <div class="section-title">LLM Analysis <span class="font-normal normal-case text-gray-500 ml-2">(model: {{ llm_analysis.model | default("unknown") }})</span></div>
+
+        {% if llm_analysis.authorship %}
+        <div class="mb-6">
+          <div class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-2">Authorship Risk</div>
+          <table>
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Contributors</th>
+                <th>Risk Level</th>
+                <th>Summary</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entry in llm_analysis.authorship %}
+              <tr>
+                <td class="font-mono text-xs text-indigo-300">{{ entry.file | default("—") }}</td>
+                <td class="tabular-nums text-gray-400">{{ entry.contributors | default("—") }}</td>
+                <td>
+                  {% set rl = entry.risk_level | default("unknown") | lower %}
+                  {% if rl == "high" %}
+                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#450a0a;color:#f87171;border:1px solid #991b1b;">high</span>
+                  {% elif rl == "medium" %}
+                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#422006;color:#fbbf24;border:1px solid #92400e;">medium</span>
+                  {% elif rl == "low" %}
+                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#052e16;color:#4ade80;border:1px solid #166534;">low</span>
+                  {% else %}
+                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#1c1c2e;color:#9ca3af;border:1px solid #374151;">{{ rl }}</span>
+                  {% endif %}
+                </td>
+                <td class="text-gray-400 text-xs">{{ entry.risk_summary | default("—") }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+
+        {% if llm_analysis.provenance %}
+        <div class="mb-6">
+          <div class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-2">Provenance Risk</div>
+          <table>
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Risk</th>
+                <th>Evidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entry in llm_analysis.provenance %}
+              <tr>
+                <td class="font-mono text-xs text-indigo-300">{{ entry.file | default("—") }}</td>
+                <td>
+                  {% set pr = entry.provenance_risk | default("unknown") | lower %}
+                  {% if pr == "high" %}
+                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#450a0a;color:#f87171;border:1px solid #991b1b;">high</span>
+                  {% elif pr == "medium" %}
+                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#422006;color:#fbbf24;border:1px solid #92400e;">medium</span>
+                  {% elif pr == "low" %}
+                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#052e16;color:#4ade80;border:1px solid #166534;">low</span>
+                  {% else %}
+                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#1c1c2e;color:#9ca3af;border:1px solid #374151;">{{ pr }}</span>
+                  {% endif %}
+                </td>
+                <td class="text-gray-400 text-xs">
+                  {% if entry.evidence %}
+                  <details>
+                    <summary class="text-indigo-400 cursor-pointer">{{ entry.evidence | length }} item{{ "s" if entry.evidence | length != 1 }}</summary>
+                    <ul class="mt-1 list-disc list-inside">
+                      {% for ev in entry.evidence %}<li>{{ ev }}</li>{% endfor %}
+                    </ul>
+                  </details>
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+
+        {% if llm_analysis.quality %}
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-2">Code Quality</div>
+          <table>
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Grade</th>
+                <th>Violations</th>
+                <th>Issues</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entry in llm_analysis.quality %}
+              <tr>
+                <td class="font-mono text-xs text-indigo-300">{{ entry.file | default("—") }}</td>
+                <td class="font-bold text-white">{{ entry.overall_grade | default("?") }}</td>
+                <td class="tabular-nums text-gray-400">{{ entry.violation_count | default(0) }}</td>
+                <td class="text-gray-400 text-xs">
+                  {% if entry.violations %}
+                  <details>
+                    <summary class="text-indigo-400 cursor-pointer">{{ entry.violations | length }} violation{{ "s" if entry.violations | length != 1 }}</summary>
+                    <ul class="mt-1 list-disc list-inside">
+                      {% for v in entry.violations %}<li>{{ v }}</li>{% endfor %}
+                    </ul>
+                  </details>
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+
+      </div>
+      {% endif %}
+    {% endif %}
+
     <!-- LLM Summaries (only if available) -->
     {% if data.llm_summaries %}
     <div class="card p-6 mb-6">

@@ -25,6 +25,7 @@ app = Flask(__name__)
 _repo_path: str = ""
 _ref: str = "HEAD"
 _use_llm: bool = False
+_top_n: int = 3
 _result: dict | None = None
 _repo_name: str = ""
 _repo_url: str = ""
@@ -55,13 +56,15 @@ def _get_repo_info(repo_path: str) -> tuple[str, str]:
 def dashboard():
     global _result
     if _result is None:
-        _result = _run_pipeline(_repo_path, ref=_ref, use_llm=_use_llm)
+        _result = _run_pipeline(_repo_path, ref=_ref, use_llm=_use_llm, top_n=_top_n)
     return render_template(
         "dashboard.html",
         data=_result,
         repo_name=_repo_name,
         repo_url=_repo_url,
         bus_data=_result.get("bus_data", {}),
+        subscriptions=_result.get("subscription_services", {}),
+        llm_analysis=_result.get("llm_analysis", {}),
     )
 
 
@@ -69,7 +72,7 @@ def dashboard():
 def graph_data():
     global _result
     if _result is None:
-        _result = _run_pipeline(_repo_path, ref=_ref)
+        _result = _run_pipeline(_repo_path, ref=_ref, top_n=_top_n)
     bus_data = _result.get("bus_data", {})
 
     nodes, edges = [], []
@@ -117,7 +120,7 @@ def no_cache(response):
 @app.route("/refresh")
 def refresh():
     global _result
-    _result = _run_pipeline(_repo_path, ref=_ref, use_llm=_use_llm)
+    _result = _run_pipeline(_repo_path, ref=_ref, use_llm=_use_llm, top_n=_top_n)
     from flask import redirect, url_for
     return redirect(url_for("dashboard"))
 
@@ -130,16 +133,23 @@ def main() -> None:
     parser.add_argument("--ref", default="HEAD", help="Git ref to analyse (default: HEAD).")
     parser.add_argument("--port", type=int, default=8080, help="Port to serve on (default: 8080).")
     parser.add_argument("--llm", action="store_true", help="Enable LLM summaries (requires OPENAI_API_KEY).")
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=3,
+        help="Number of critical files to run LLM analysis on (default: 3).",
+    )
     args = parser.parse_args()
 
     if not os.path.isdir(args.repo_path):
         print(f"Error: '{args.repo_path}' is not a directory.", file=sys.stderr)
         sys.exit(1)
 
-    global _repo_path, _ref, _use_llm, _repo_name, _repo_url
+    global _repo_path, _ref, _use_llm, _top_n, _repo_name, _repo_url
     _repo_path = os.path.abspath(args.repo_path)
     _ref = args.ref
     _use_llm = args.llm
+    _top_n = args.top_n
     _repo_name, _repo_url = _get_repo_info(_repo_path)
 
     print(f"Starting dashboard for: {_repo_path}")

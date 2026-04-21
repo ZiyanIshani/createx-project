@@ -39,8 +39,8 @@ def _run_pipeline(
     ref: str = "HEAD",
     use_llm: bool = False,
     standards_path: str | None = None,
-    model: str = "mistral",
-    ollama_url: str = "http://localhost:11434",
+    model: str = "llama-3.1-8b-instant",
+    top_n: int = 3,
 ) -> dict:
     # --- Step 1: Repository Ingestion ---
     languages = language_breakdown(repo_path)
@@ -87,30 +87,46 @@ def _run_pipeline(
     # --- Step 3: Test Coverage ---
     test_cov = compute_test_coverage(repo_path, dep_graph=graph)
 
+    # --- Step 3b: Subscription Service Detection (heuristic, always runs) ---
+    # Build per-file language map for subscription scan
+    _per_file_languages_sub: dict[str, str] = {}
+    try:
+        from repo_ingestion.file_tree import walk_repo as _walk_repo_sub
+        for _fpath, _lang in _walk_repo_sub(repo_path):
+            _rel = os.path.relpath(_fpath, repo_path)
+            _per_file_languages_sub[_rel] = _lang
+    except Exception:
+        pass
+
+    from llm.agents.subscriptions import SubscriptionDetector
+    _sub_detector = SubscriptionDetector()
+    _sub_matches = _sub_detector.scan(repo_path, _per_file_languages_sub)
+    subscription_services = _sub_detector.summarize(_sub_matches)
+
     # --- Step 4: LLM Agentic Analysis (optional) ---
     llm_summaries: list = []
     llm_analysis: dict = {}
 
     if use_llm:
-        from llm.client import OllamaClient, OllamaConnectionError
+        from llm.client import GroqClient, GroqConnectionError
         from llm.agents.authorship import AuthorshipAgent
         from llm.agents.provenance import ProvenanceAgent
         from llm.agents.quality import QualityAgent
 
-        client = OllamaClient(base_url=ollama_url, model=model)
+        client = GroqClient(model=model)
 
         if not client.is_available():
             print(
-                f"Warning: Ollama not available at {ollama_url}. Skipping LLM analysis.",
+                "Warning: Groq API not available. Skipping LLM analysis.",
                 file=sys.stderr,
             )
-            llm_analysis = {"error": f"Ollama not available at {ollama_url}"}
+            llm_analysis = {"error": "Groq API not available"}
         else:
             # Identify critical files: union of fragile + single-contributor, cap at 10
             fragile_files = metrics.get("fragile_files", [])
             fragile_paths = {e["file"] for e in fragile_files}
             single_contrib_paths = set(single_contributor_files.keys())
-            critical_paths = list(fragile_paths | single_contrib_paths)[:10]
+            critical_paths = list(fragile_paths | single_contrib_paths)[:top_n]
 
             # Build per-file language map from languages summary
             per_file_languages: dict[str, str] = {}
@@ -127,31 +143,34 @@ def _run_pipeline(
                 c["email"]: c["recency_score"] for c in top_contributors
             }
 
-            # Authorship
-            auth_agent = AuthorshipAgent(client)
-            authorship_results = auth_agent.analyze_critical_files(
-                metrics, bus_data, contributor_recency_map, top_n=5
-            )
+            try:
+                # Authorship
+                auth_agent = AuthorshipAgent(client)
+                authorship_results = auth_agent.analyze_critical_files(
+                    metrics, bus_data, contributor_recency_map, top_n=top_n
+                )
 
-            # Provenance
-            prov_agent = ProvenanceAgent(client)
-            provenance_results = prov_agent.scan_files(
-                critical_paths, repo_path, per_file_languages
-            )
+                # Provenance
+                prov_agent = ProvenanceAgent(client)
+                provenance_results = prov_agent.scan_files(
+                    critical_paths, repo_path, per_file_languages
+                )
 
-            # Quality
-            quality_agent = QualityAgent(client)
-            critical_fragile = [e for e in fragile_files if e["file"] in set(critical_paths)]
-            quality_results = quality_agent.analyze_critical_files(
-                critical_fragile, repo_path, per_file_languages, standards_path
-            )
+                # Quality
+                quality_agent = QualityAgent(client)
+                critical_fragile = [e for e in fragile_files if e["file"] in set(critical_paths)]
+                quality_results = quality_agent.analyze_critical_files(
+                    critical_fragile, repo_path, per_file_languages, standards_path
+                )
 
-            llm_analysis = {
-                "model": model,
-                "authorship": authorship_results,
-                "provenance": provenance_results,
-                "quality": quality_results,
-            }
+                llm_analysis = {
+                    "model": model,
+                    "authorship": authorship_results,
+                    "provenance": provenance_results,
+                    "quality": quality_results,
+                }
+            except Exception as e:
+                llm_analysis = {"error": str(e)}
 
     return {
         "repo_path": os.path.abspath(repo_path),
@@ -164,6 +183,11 @@ def _run_pipeline(
         "dep_graph_metrics": metrics,
         "architectural_risk": arch_risk,
         "test_coverage": test_cov,
+        "subscription_services": {
+            "service_count": subscription_services["service_count"],
+            "services": subscription_services["services"],
+            "by_category": subscription_services["by_category"],
+        },
         "llm_summaries": llm_summaries,
         "llm_analysis": llm_analysis,
         "contributor_file_graph": graph_image_path,
@@ -277,6 +301,25 @@ def _print_pretty(result: dict) -> None:
         print(f"    • {reason}")
     print()
 
+    # Subscription Services
+    sub = result.get("subscription_services", {})
+    if sub and sub.get("service_count", 0) > 0:
+        print("SUBSCRIPTION SERVICES DETECTED")
+        print(sep)
+        total_files = sum(s["reference_count"] for s in sub.get("services", []))
+        print(f"  {sub['service_count']} external service(s) found\n")
+        by_cat = sub.get("by_category", {})
+        services_by_name = {s["service"]: s for s in sub.get("services", [])}
+        for category, svc_names in sorted(by_cat.items()):
+            print(f"  {category}")
+            for svc_name in svc_names:
+                s = services_by_name.get(svc_name, {})
+                print(
+                    f"    {svc_name:<20} {s.get('tier', ''):<20} "
+                    f"{s.get('reference_count', 0):>3} reference(s)"
+                )
+        print()
+
     # LLM Agentic Analysis
     llm_a = result.get("llm_analysis", {})
     if llm_a and "error" not in llm_a:
@@ -343,7 +386,7 @@ def main() -> None:
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Enable LLM agentic analysis via Ollama (off by default).",
+        help="Enable LLM analysis via Groq API (free tier: 30 RPM, 14400 RPD).",
     )
     parser.add_argument(
         "--standards",
@@ -353,13 +396,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="mistral",
-        help="Ollama model name (default: mistral).",
+        default="llama-3.1-8b-instant",
+        help="Groq model name (default: llama-3.1-8b-instant).",
     )
     parser.add_argument(
-        "--ollama-url",
-        default="http://localhost:11434",
-        help="Ollama base URL (default: http://localhost:11434).",
+        "--top-n",
+        type=int,
+        default=3,
+        help="Number of critical files to run LLM analysis on (default: 3).",
     )
     args = parser.parse_args()
 
@@ -373,7 +417,7 @@ def main() -> None:
         use_llm=args.llm,
         standards_path=args.standards,
         model=args.model,
-        ollama_url=args.ollama_url,
+        top_n=args.top_n,
     )
 
     if args.output == "pretty":
