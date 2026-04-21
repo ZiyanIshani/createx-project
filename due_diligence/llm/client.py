@@ -16,7 +16,7 @@ import sys
 
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "llama-3.1-8b-instant"
-PLACEHOLDER_KEY = "GROQ_API_KEY_PLACEHOLDER"
+PLACEHOLDER_KEY = "REPLACE_WITH_YOUR_GROQ_API_KEY"
 
 
 class GroqConnectionError(Exception):
