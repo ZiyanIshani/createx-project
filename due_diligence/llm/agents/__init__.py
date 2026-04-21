@@ -4,23 +4,39 @@ Base mixin for the ReAct agent loop shared by all agents.
 from __future__ import annotations
 
 import json
+import re
+import time
 
 
 class AgentLoopMixin:
+    """Provides _run_agent_loop for all agent subclasses."""
 
     def _clean_json_response(self, content: str) -> str:
-        """Strip markdown code fences that Mistral wraps around JSON responses."""
+        """
+        Extract JSON from an LLM response that may contain markdown fences,
+        prose preamble, or both. Handles all Mistral formatting quirks.
+        """
         content = content.strip()
-        # Remove ```json ... ``` or ``` ... ```
-        if content.startswith("```"):
-            lines = content.split("\n")
-            # Remove first line (```json or ```) and last line (```)
-            lines = lines[1:] if lines[0].startswith("```") else lines
-            lines = lines[:-1] if lines and lines[-1].strip() == "```" else lines
-            content = "\n".join(lines).strip()
-        return content
 
-    """Provides _run_agent_loop for all agent subclasses."""
+        # Case 1: response contains a ```json ... ``` or ``` ... ``` block
+        # anywhere in the string (Mistral often puts prose before the block)
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
+        if match:
+            return match.group(1).strip()
+
+        # Case 2: response starts with { or [ — already raw JSON
+        if content.startswith("{") or content.startswith("["):
+            return content
+
+        # Case 3: find the first { and last } and extract that substring
+        # handles cases like "Sure! Here is the JSON: {...}"
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return content[start:end + 1]
+
+        # Case 4: no JSON found — return as-is and let json.loads fail naturally
+        return content
 
     def _run_agent_loop(
         self,
@@ -36,22 +52,12 @@ class AgentLoopMixin:
 
         for _ in range(max_iterations):
             response = self.client.chat(messages)
-            content = response["choices"][0]["message"]["content"]
-
-            # Strip markdown code fences that Mistral sometimes wraps around JSON
-            stripped = content.strip()
-            if stripped.startswith("```"):
-                lines = stripped.split("\n")
-                # drop opening fence (```json or ```) and closing fence (```)
-                inner = lines[1:] if lines[0].startswith("```") else lines
-                if inner and inner[-1].strip() == "```":
-                    inner = inner[:-1]
-                stripped = "\n".join(inner).strip()
-            else:
-                stripped = stripped
+            raw_content = response["choices"][0]["message"]["content"]
+            cleaned = self._clean_json_response(raw_content)
 
             try:
-                parsed = json.loads(self._clean_json_response(content))
+                parsed = json.loads(cleaned)
+
                 if parsed.get("tool") == "finish":
                     return parsed.get("answer")
 
@@ -60,14 +66,17 @@ class AgentLoopMixin:
 
                 if tool_name in tools:
                     tool_result = tools[tool_name](**tool_args)
-                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "assistant", "content": raw_content})
                     messages.append(
                         {"role": "user", "content": f"Tool result: {json.dumps(tool_result)}"}
                     )
                 else:
-                    return stripped  # unknown tool → treat as final answer
+                    # Unknown tool name — treat the cleaned content as final answer
+                    return cleaned
 
             except json.JSONDecodeError:
-                return stripped  # prose response → treat as final answer
+                # Model returned prose with no parseable JSON — treat as final answer
+                return cleaned
 
-        return messages[-1]["content"]  # max iterations hit
+        # Max iterations reached — return last message content
+        return self._clean_json_response(messages[-1]["content"])

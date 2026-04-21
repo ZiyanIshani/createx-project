@@ -124,11 +124,20 @@ class ProvenanceAgent(AgentLoopMixin):
     def _parse_chunk_result(self, raw, file_path: str, start_line: int) -> dict:
         if isinstance(raw, dict):
             return raw
-        try:
-            result = json.loads(raw) if isinstance(raw, str) else {}
-            return result
-        except (json.JSONDecodeError, TypeError):
-            return {"evidence": [], "suspicious_sections": [], "parse_error": True, "raw": str(raw)}
+        elif isinstance(raw, str):
+            try:
+                result = json.loads(self._clean_json_response(raw))
+                return result
+            except (json.JSONDecodeError, AttributeError):
+                return {
+                    "risk_level": "unknown",
+                    "risk_summary": raw[:300] if raw else "No response from model.",
+                    "evidence": [],
+                    "suspicious_sections": [],
+                    "parse_error": True,
+                }
+        else:
+            return {"risk_level": "unknown", "risk_summary": "No response.", "evidence": [], "suspicious_sections": [], "parse_error": True}
 
     def scan_files(
         self,

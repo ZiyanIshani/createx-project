@@ -17,12 +17,17 @@ The pipeline runs in up to three stages against any local git repository:
 - Risk metrics: circular dependencies, fragile hubs, orphaned files, external package exposure
 - Architectural risk score (0–10)
 
-**Step 3 — LLM Agentic Analysis** *(optional, requires Ollama)*
+**Step 3 — Subscription Service Detection** *(always runs, no LLM needed)*
+- Heuristic scan of every tracked file for references to external SaaS APIs, cloud platforms, payment processors, and data services
+- Three signal types: import/package names, URL patterns, and string/comment usage patterns
+- Produces a deduplicated summary of services found, grouped by category (Cloud, Payments, Monitoring, etc.) with reference counts per file
+
+**Step 4 — LLM Agentic Analysis** *(optional, requires Groq API key)*
 - **Authorship risk**: who wrote the critical files and are they still around?
 - **Provenance risk**: does any code look copy-pasted from online sources?
 - **Code quality**: does the code meet your coding standards?
 
-The LLM stage uses a hand-rolled ReAct agent loop (Reason → Act → Observe) against a locally-running Ollama instance. No cloud APIs, no LLM framework dependencies.
+The LLM stage uses a hand-rolled ReAct agent loop (Reason → Act → Observe) against the Groq API.
 
 ## Installation
 
@@ -35,38 +40,36 @@ pip install -r requirements.txt
 - `networkx>=3.0` — dependency graph construction and analysis
 - `tree-sitter>=0.21.0,<0.22.0` — AST parsing
 - `tree-sitter-languages>=1.10.0` — pre-built language grammars
-- `requests>=2.31.0` — HTTP calls to Ollama (LLM stage only)
+- `requests>=2.31.0` — HTTP calls to Groq API (LLM stage only)
 
-## Ollama Setup (for LLM analysis)
+## LLM Backend
 
-```bash
-# Install ollama (macOS)
-brew install ollama
+This tool uses the Groq API for LLM analysis. Groq offers a free tier with
+generous limits (30 RPM, 14,400 RPD).
 
-# Pull the default model
-ollama pull mistral
+Set your API key:
+    export GROQ_API_KEY="your-key-here"
 
-# Start the server (runs on port 11434)
-ollama serve
+Get a free key at: https://console.groq.com/keys
 
-# Verify it's running
-curl http://localhost:11434/api/tags
-```
+Recommended models (pass via --model flag):
+- llama-3.1-70b-versatile  (default, best quality)
+- llama-3.1-8b-instant     (faster, lower quality)
+- mixtral-8x7b-32768       (good for long files, 32k context)
 
 ## Usage
 
 ```bash
-python main.py <repo_path> [--ref HEAD] [--output json|pretty] [--llm] [--standards PATH] [--model NAME] [--ollama-url URL]
+python main.py <repo_path> [--ref HEAD] [--output json|pretty] [--llm] [--standards PATH] [--model NAME]
 ```
 
 **Arguments:**
 - `repo_path` — path to the git repository to analyze
 - `--ref` — git ref to analyze (default: `HEAD`)
 - `--output` — `json` (default) or `pretty` for a human-readable report
-- `--llm` — enable LLM agentic analysis (off by default; requires Ollama running)
+- `--llm` — enable LLM agentic analysis (off by default; requires Groq API key)
 - `--standards` — path to a coding standards file (markdown or plain text)
-- `--model` — Ollama model name (default: `mistral`)
-- `--ollama-url` — Ollama base URL (default: `http://localhost:11434`)
+- `--model` — Groq model name (default: `llama-3.1-70b-versatile`)
 
 **Examples:**
 
@@ -77,14 +80,14 @@ python main.py /path/to/repo
 # Human-readable report, no LLM
 python main.py /path/to/repo --output pretty
 
-# Full analysis with LLM (default model: mistral)
+# Full analysis with LLM (default model: llama-3.1-70b-versatile)
 python main.py /path/to/repo --llm --output pretty
 
 # With a custom coding standards file
 python main.py /path/to/repo --llm --standards standards/my_standards.md --output pretty
 
 # With a different model
-python main.py /path/to/repo --llm --model codestral --output pretty
+python main.py /path/to/repo --llm --model mixtral-8x7b-32768 --output pretty
 
 # Analyze a specific branch or tag
 python main.py /path/to/repo --ref main --output pretty
@@ -129,8 +132,31 @@ python main.py /path/to/repo --ref main --output pretty
     "score": 4,
     "reasons": ["1 circular dependency group detected"]
   },
+  "subscription_services": {
+    "service_count": 3,
+    "services": [
+      {
+        "service": "stripe",
+        "category": "Payments",
+        "tier": "pay-as-you-go",
+        "reference_count": 2,
+        "files": ["src/billing.py", "src/checkout.py"],
+        "first_seen": {
+          "file": "src/billing.py",
+          "line": 1,
+          "signal_type": "import",
+          "matched_text": "import stripe"
+        }
+      }
+    ],
+    "by_category": {
+      "Cloud": ["aws"],
+      "Payments": ["stripe"],
+      "Monitoring": ["datadog"]
+    }
+  },
   "llm_analysis": {
-    "model": "mistral",
+    "model": "llama-3.1-70b-versatile",
     "authorship": [
       {
         "file": "src/core/auth.py",
@@ -217,13 +243,14 @@ due_diligence/
 │   ├── ast_parser.py                # tree-sitter parsing → imports + calls
 │   └── dep_graph.py                 # NetworkX graph construction + metrics
 ├── llm/
-│   ├── client.py                    # OllamaClient — raw HTTP wrapper (no openai SDK)
+│   ├── client.py                    # GroqClient — raw HTTP wrapper (no openai SDK)
 │   ├── prompts.py                   # all prompt templates as string constants
 │   └── agents/
 │       ├── __init__.py              # AgentLoopMixin — shared ReAct loop
 │       ├── authorship.py            # AuthorshipAgent
 │       ├── provenance.py            # ProvenanceAgent
-│       └── quality.py              # QualityAgent
+│       ├── quality.py               # QualityAgent
+│       └── subscriptions.py         # SubscriptionDetector — heuristic SaaS scanner
 └── tests/
     ├── test_git_stats.py
     ├── test_file_tree.py
@@ -231,7 +258,9 @@ due_diligence/
     ├── test_dep_graph.py
     ├── test_authorship.py
     ├── test_provenance.py
-    └── test_quality.py
+    ├── test_quality.py
+    ├── test_agent_loop.py           # _clean_json_response unit tests
+    └── test_subscriptions.py        # SubscriptionDetector unit tests
 ```
 
 ## Supported Languages
@@ -246,13 +275,14 @@ AST-level import parsing is supported for: Python, JavaScript/TypeScript, Java, 
 pytest tests/
 ```
 
-Tests use real minimal git repositories created via `pygit2` — no mocking of git internals. LLM agent tests mock the Ollama client and run entirely offline.
+Tests use real minimal git repositories created via `pygit2` — no mocking of git internals. LLM agent tests mock the Groq client and run entirely offline.
 
 ## Design Constraints
 
-- **No network calls** — fully offline by default; Ollama runs locally
+- **Minimal network calls** — only the Groq API when `--llm` is used
 - **No code execution** — never compiles, runs, or installs the target repo's code
 - **No code storage** — file content read for LLM analysis is never written to disk
-- **Graceful degradation** — handles empty repos, binary files, and parse errors without crashing; unavailable Ollama produces a partial result with a warning rather than a crash
+- **Graceful degradation** — handles empty repos, binary files, and parse errors without crashing; unavailable Groq API produces a partial result with a warning rather than a crash
 - **Performance** — Steps 1 + 2 complete in under 60 seconds for repos up to 50k LOC
 - **LLM is opt-in** — `--llm` flag required; without it the pipeline runs exactly as before
+- **Subscription scan always runs** — heuristic only, no Ollama needed; results appear in all output modes
