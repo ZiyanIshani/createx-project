@@ -86,6 +86,19 @@ def resolve_import(
     if raw_import in all_files_set:
         return raw_import
 
+    # --- Rust `mod <name>;` resolution ---
+    # A bare identifier like "utils" from `mod utils;` maps to either:
+    #   <source_dir>/utils.rs   (inline sibling module)
+    #   <source_dir>/utils/mod.rs  (directory module)
+    if language == "Rust" and "/" not in raw_import and "." not in raw_import and "::" not in raw_import:
+        source_dir = posixpath.dirname(source_file)
+        for candidate in [
+            posixpath.join(source_dir, raw_import + ".rs"),
+            posixpath.join(source_dir, raw_import, "mod.rs"),
+        ]:
+            if candidate in all_files_set:
+                return candidate
+
     # Try matching by module stem (last component without extension)
     module_stem = raw_import.split(".")[-1] if "." in raw_import else raw_import
     # Also handle slashes (Go-style "github.com/foo/bar" → "bar")
