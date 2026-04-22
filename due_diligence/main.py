@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -34,6 +35,265 @@ from static_analysis.graph_viz import render_contributor_file_graph
 from static_analysis.test_coverage import compute_test_coverage
 
 
+def _compute_code_churn(repo_path: str) -> dict:
+    """
+    Identify 'hot' files — those with disproportionately high commit frequency
+    relative to the rest of the codebase.
+
+    A file is flagged as a hot spot when its commit count exceeds 2× the
+    median file commit count (with a floor of 3 commits to suppress noise on
+    brand-new or rarely-touched files).  Using the median as the baseline means
+    the signal is self-calibrating: it adapts to the repo's own activity level
+    rather than requiring a hand-tuned absolute threshold, so a small quiet repo
+    (gron, 223 commits) and a large active one (10,000 commits) are judged by
+    the same relative standard.
+
+    High churn on a specific file signals instability — the code is hard to get
+    right, likely poorly factored, or a bottleneck that many changes flow through.
+    All of these are direct contributors to technical debt.
+    """
+    import statistics
+    from repo_ingestion.file_tree import discover_files
+
+    _skip_exts = {
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+        ".woff", ".woff2", ".ttf", ".eot",
+        ".pdf", ".zip", ".tar", ".gz",
+        ".lock", ".sum", ".mod", ".min.js",
+    }
+
+    _empty: dict = {
+        "hot_file_count": 0, "hot_file_ratio": 0.0,
+        "total_files": 0, "median_commits": 0.0, "hot_files": [],
+    }
+
+    all_files = discover_files(repo_path)
+    source_files = [
+        f for f in all_files
+        if os.path.splitext(f)[1].lower() not in _skip_exts
+    ]
+    if not source_files:
+        return _empty
+
+    # --- Per-file commit counts (one subprocess per file, unambiguous) ---
+    file_counts: dict[str, int] = {}
+    for rel_path in source_files:
+        try:
+            count_str = subprocess.check_output(
+                ["git", "rev-list", "--count", "HEAD", "--", rel_path],
+                cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+            file_counts[rel_path] = int(count_str) if count_str.isdigit() else 0
+        except Exception:
+            file_counts[rel_path] = 0
+
+    counts = list(file_counts.values())
+    median_count = statistics.median(counts) if counts else 0.0
+
+    # Hot threshold: 2× the median, but never lower than 3 commits
+    hot_cutoff = max(median_count * 2.0, 3)
+
+    hot_files = [
+        {
+            "file":    path,
+            "commits": count,
+            "vs_median": round(count / max(median_count, 1), 1),
+        }
+        for path, count in sorted(file_counts.items(), key=lambda x: -x[1])
+        if count >= hot_cutoff
+    ]
+
+    return {
+        "hot_file_count":  len(hot_files),
+        "hot_file_ratio":  len(hot_files) / len(source_files),
+        "total_files":     len(source_files),
+        "median_commits":  round(median_count, 1),
+        "hot_files":       hot_files[:10],
+    }
+
+
+def _compute_doc_density(repo_path: str, per_file_languages: dict) -> float:
+    """
+    Return the fraction of non-blank code lines that are comments or docstrings.
+
+    Supports Python, Go, JavaScript, TypeScript, Rust, Java, C/C++.
+    Returns a value in [0, 1]; higher = more documentation.
+    """
+    _comment_prefixes: dict[str, tuple[str, ...]] = {
+        "Python":     ("#", '"""', "'''"),
+        "Go":         ("//",),
+        "JavaScript": ("//", "/*", " *"),
+        "TypeScript": ("//", "/*", " *"),
+        "Rust":       ("//",),
+        "Java":       ("//", "/*", " *"),
+        "C":          ("//", "/*", " *"),
+        "C++":        ("//", "/*", " *"),
+    }
+
+    total_lines = 0
+    doc_lines = 0
+
+    for rel_path, lang in per_file_languages.items():
+        prefixes = _comment_prefixes.get(lang)
+        if not prefixes:
+            continue
+        abs_path = os.path.join(repo_path, rel_path)
+        try:
+            with open(abs_path, "r", errors="ignore") as fh:
+                for line in fh:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    total_lines += 1
+                    if any(stripped.startswith(p) for p in prefixes):
+                        doc_lines += 1
+        except OSError:
+            continue
+
+    return doc_lines / total_lines if total_lines > 0 else 0.0
+
+
+def _remediation_estimate(debt_score: int, total_files: int) -> str:
+    """
+    Deterministic remediation time estimate based on debt score and codebase size.
+
+    Model assumptions:
+    - 2 engineers devoting 20% of sprint capacity to debt reduction
+      = 2 × 20 working days × 0.20 = 8 engineer-days available per month
+    - Score scales non-linearly (^1.5): low debt is cheap, high debt compounds
+    - Codebase size scales on a log curve relative to a 50-file reference repo
+    - Expressed as a ±25% range to be honest about estimation uncertainty
+
+    Calibration reference points (50-file repo):
+      score 20  →  ~0.5 months   ("2-4 weeks")
+      score 40  →  ~1.5 months   ("1-2 months")
+      score 60  →  ~3 months     ("2-4 months")
+      score 80  →  ~5.5 months   ("4-7 months")
+      score 100 →  ~7.5 months   ("6-10 months")
+    """
+    if debt_score <= 3:
+        return "< 1 week"
+
+    # 8 engineer-days of debt-reduction capacity per month
+    eng_days_per_month = 8.0
+
+    # Base days for a reference 50-file codebase at score=100
+    base_days = 60.0
+
+    # Non-linear score factor: debt compounds at higher scores
+    score_factor = (debt_score / 100.0) ** 1.5
+
+    # Log-scale size factor relative to a 50-file reference repo
+    size_factor = max(0.4, math.log10(total_files + 1) / math.log10(51))
+
+    raw_days = base_days * score_factor * size_factor
+    months = raw_days / eng_days_per_month
+
+    low = max(0.1, months * 0.75)
+    high = months * 1.25
+
+    if high < 0.35:
+        return "< 1 week"
+    if high < 0.6:
+        return "1-2 weeks"
+    if high < 1.0:
+        return "2-4 weeks"
+    if low < 1.0:
+        return f"1-{math.ceil(high)} months"
+    return f"{math.floor(low)}-{math.ceil(high)} months"
+
+
+def _compute_debt_scores(
+    metrics: dict,
+    test_coverage: dict,
+    bus_factor_risk: list,
+    churn_data: dict | None = None,
+    doc_density: float = 0.0,
+    top_contributors: list | None = None,
+) -> dict:
+    """
+    Return component scores (0-100 each, higher = more debt) and a weighted total.
+
+    Weights (sum to 1.0):
+      knowledge concentration  25%  — bus factor + contributor dominance
+      test coverage gaps       25%  — missing tests = fragile changes
+      code churn               20%  — hot files = unstable, hard-to-maintain code
+      orphaned / dead code     15%  — unused files add maintenance burden
+      hub fragility            10%  — heavily-imported files are risky to change
+      documentation density     5%  — low docs = high onboarding / knowledge cost
+    """
+    top_contributors = top_contributors or []
+    churn_data = churn_data or {}
+    total_files = max(metrics.get("internal_file_count", 1), 1)
+    coverage_pct = test_coverage.get("coverage_percent", 0)
+
+    # --- Knowledge concentration (bus factor + contributor dominance) ---
+    file_bus_score = min(int((len(bus_factor_risk) / total_files) * 100 * 2.5), 100)
+    total_commits = sum(c["commit_count"] for c in top_contributors) or 1
+    top_share = top_contributors[0]["commit_count"] / total_commits if top_contributors else 0
+    dominance_score = min(int(max(top_share - 0.5, 0) * 200), 100)
+    bus_score = min(int(file_bus_score * 0.5 + dominance_score * 0.5), 100)
+
+    # --- Test coverage gaps ---
+    test_score = min(int(100 - coverage_pct), 100)
+
+    # --- Code churn (hot files) ---
+    # hot_file_ratio = fraction of source files that are >2× the median commit count.
+    # Scale: 0% hot → 0, ≥33% hot → 100.
+    # A repo where a third of its files are constant change magnets is genuinely
+    # unstable; anything above that is capped at 100.
+    hot_ratio = churn_data.get("hot_file_ratio", 0.0)
+    churn_score = min(int(hot_ratio * 300), 100)
+
+    # --- Orphaned / dead code ---
+    orphan_score = min(int((len(metrics.get("orphaned_files", [])) / total_files) * 100 * 1.5), 100)
+
+    # --- Hub fragility ---
+    max_in_deg = metrics.get("max_in_degree", 0)
+    hub_score = min(int((max_in_deg / (total_files * 0.15 + 1)) * 100), 100)
+
+    # --- Documentation density ---
+    # Target 15% doc density as "acceptable"; below that scales to 100.
+    # doc_density=0 → score 100; doc_density≥0.15 → score 0
+    doc_score = min(int(max(0.15 - doc_density, 0) / 0.15 * 100), 100)
+
+    total = int(
+        bus_score    * 0.25 +
+        test_score   * 0.25 +
+        churn_score  * 0.20 +
+        orphan_score * 0.15 +
+        hub_score    * 0.10 +
+        doc_score    * 0.05
+    )
+
+    top_name = top_contributors[0]["name"] if top_contributors else "unknown"
+    remediation = _remediation_estimate(total, total_files)
+
+    return {
+        "bus_score":            bus_score,
+        "test_score":           test_score,
+        "churn_score":          churn_score,
+        "orphan_score":         orphan_score,
+        "hub_score":            hub_score,
+        "doc_score":            doc_score,
+        "total":                total,
+        "remediation_estimate": remediation,
+        # Raw inputs for the LLM narrative
+        "bf_file_count":         len(bus_factor_risk),
+        "coverage_pct":          coverage_pct,
+        "coverage_estimated":    test_coverage.get("coverage_estimated", False),
+        "hot_file_count":        churn_data.get("hot_file_count", 0),
+        "hot_file_ratio_pct":    round(hot_ratio * 100, 1),
+        "median_commits":        churn_data.get("median_commits", 0.0),
+        "doc_density_pct":       round(doc_density * 100, 1),
+        "orphaned_files":        len(metrics.get("orphaned_files", [])),
+        "max_in_degree":         max_in_deg,
+        "total_files":           total_files,
+        "top_contributor_share": round(top_share * 100, 1),
+        "top_contributor_name":  top_name,
+    }
+
+
 def _run_pipeline(
     repo_path: str,
     ref: str = "HEAD",
@@ -49,17 +309,40 @@ def _run_pipeline(
     augmented = contributor_recency_score(raw_contributors, repo_path=repo_path, ref=ref)
     lines_by_email = lines_per_contributor(repo_path, ref=ref)
 
-    top_contributors = [
-        {
-            "commit_count": count,
-            "name": name,
-            "email": email,
-            "last_commit_ts": last_ts,
-            "recency_score": recency,
-            "lines_added": lines_by_email.get(email, 0),
-        }
-        for count, name, email, last_ts, recency in augmented[:10]
-    ]
+    # Merge entries that share the same display name (e.g. same person with
+    # two Git identities / a noreply GitHub address and a real one).
+    _merged: dict[str, dict] = {}
+    for count, name, email, last_ts, recency in augmented:
+        key = name.strip().lower()
+        lines = lines_by_email.get(email, 0)
+        if key not in _merged:
+            _merged[key] = {
+                "name": name,
+                "commit_count": count,
+                "emails": [email],
+                "last_commit_ts": last_ts,
+                "recency_score": recency,
+                "lines_added": lines,
+            }
+        else:
+            entry = _merged[key]
+            entry["commit_count"] += count
+            entry["lines_added"] += lines
+            entry["emails"].append(email)
+            if last_ts > entry["last_commit_ts"]:
+                entry["last_commit_ts"] = last_ts
+            if recency > entry["recency_score"]:
+                entry["recency_score"] = recency
+
+    top_contributors = sorted(
+        _merged.values(), key=lambda x: x["commit_count"], reverse=True
+    )[:10]
+
+    # Resolve a single primary email per contributor: prefer a real address
+    # over a GitHub noreply address so the table reads cleanly.
+    for c in top_contributors:
+        real = [e for e in c["emails"] if "noreply" not in e]
+        c["email"] = real[0] if real else c["emails"][0]
 
     bus_data = bus_factor_data(repo_path, ref=ref)
     single_contributor_files = {
@@ -87,90 +370,132 @@ def _run_pipeline(
     # --- Step 3: Test Coverage ---
     test_cov = compute_test_coverage(repo_path, dep_graph=graph)
 
-    # --- Step 3b: Subscription Service Detection (heuristic, always runs) ---
-    # Build per-file language map for subscription scan
-    _per_file_languages_sub: dict[str, str] = {}
-    try:
-        from repo_ingestion.file_tree import walk_repo as _walk_repo_sub
-        for _fpath, _lang in _walk_repo_sub(repo_path):
-            _rel = os.path.relpath(_fpath, repo_path)
-            _per_file_languages_sub[_rel] = _lang
-    except Exception:
-        pass
+    # --- Step 3b: Per-file language map (used by subscriptions, doc density, LLM) ---
+    # language_breakdown() was already called at the top of the pipeline; reuse it.
+    per_file_languages: dict[str, str] = languages.get("per_file", {})
+
+    # --- Step 3c: Code churn + documentation density for debt scoring ---
+    churn_data = _compute_code_churn(repo_path)
+    doc_density = _compute_doc_density(repo_path, per_file_languages)
+
+    # --- Debt scores (always computed so the template can use them) ---
+    debt_scores = _compute_debt_scores(
+        metrics, test_cov, bus_factor_risk,
+        churn_data=churn_data,
+        doc_density=doc_density,
+        top_contributors=top_contributors,
+    )
+
+    # --- Subscription Service Detection (heuristic, always runs) ---
+    _per_file_languages_sub = per_file_languages
 
     from llm.agents.subscriptions import SubscriptionDetector
     _sub_detector = SubscriptionDetector()
     _sub_matches = _sub_detector.scan(repo_path, _per_file_languages_sub)
     subscription_services = _sub_detector.summarize(_sub_matches)
 
-    # --- Step 4: LLM Agentic Analysis (optional) ---
-    llm_summaries: list = []
+    # --- Step 4: LLM Agentic Analysis (optional, Groq-based) ---
     llm_analysis: dict = {}
 
     if use_llm:
-        from llm.client import GroqClient, GroqConnectionError
-        from llm.agents.authorship import AuthorshipAgent
-        from llm.agents.provenance import ProvenanceAgent
-        from llm.agents.quality import QualityAgent
+        try:
+            from llm.client import GroqClient, GroqConnectionError
+            from llm.agents.authorship import AuthorshipAgent
+            from llm.agents.provenance import ProvenanceAgent
+            from llm.agents.quality import QualityAgent
 
-        client = GroqClient(model=model)
+            client = GroqClient(model=model)
 
-        if not client.is_available():
-            print(
-                "Warning: Groq API not available. Skipping LLM analysis.",
-                file=sys.stderr,
-            )
-            llm_analysis = {"error": "Groq API not available"}
-        else:
-            # Identify critical files: union of fragile + single-contributor, cap at 10
-            fragile_files = metrics.get("fragile_files", [])
-            fragile_paths = {e["file"] for e in fragile_files}
-            single_contrib_paths = set(single_contributor_files.keys())
-            critical_paths = list(fragile_paths | single_contrib_paths)[:top_n]
+            if not client.is_available():
+                print("Warning: Groq API not available. Skipping LLM analysis.", file=sys.stderr)
+                llm_analysis = {"error": "Groq API not available — set GROQ_API_KEY and try again."}
+            else:
+                # Build per-file language map
+                per_file_languages: dict[str, str] = {}
+                try:
+                    from repo_ingestion.file_tree import walk_repo
+                    for fpath, lang in walk_repo(repo_path):
+                        rel = os.path.relpath(fpath, repo_path)
+                        per_file_languages[rel] = lang
+                except Exception:
+                    pass
 
-            # Build per-file language map from languages summary
-            per_file_languages: dict[str, str] = {}
-            try:
-                from repo_ingestion.file_tree import walk_repo
-                for fpath, lang in walk_repo(repo_path):
-                    rel = os.path.relpath(fpath, repo_path)
-                    per_file_languages[rel] = lang
-            except Exception:
-                pass
+                contributor_recency_map = {
+                    email: c["recency_score"]
+                    for c in top_contributors
+                    for email in c["emails"]
+                }
 
-            # Build contributor recency map
-            contributor_recency_map = {
-                c["email"]: c["recency_score"] for c in top_contributors
-            }
+                # Pick critical files: union of fragile + single-contributor, cap at top_n
+                fragile_files = metrics.get("fragile_files", [])
+                fragile_paths = {e["file"] for e in fragile_files}
+                critical_paths = list(fragile_paths | set(single_contributor_files.keys()))[:top_n]
 
-            try:
-                # Authorship
                 auth_agent = AuthorshipAgent(client)
                 authorship_results = auth_agent.analyze_critical_files(
                     metrics, bus_data, contributor_recency_map, top_n=top_n
                 )
 
-                # Provenance
                 prov_agent = ProvenanceAgent(client)
                 provenance_results = prov_agent.scan_files(
                     critical_paths, repo_path, per_file_languages
                 )
 
-                # Quality
-                quality_agent = QualityAgent(client)
                 critical_fragile = [e for e in fragile_files if e["file"] in set(critical_paths)]
+                quality_agent = QualityAgent(client)
                 quality_results = quality_agent.analyze_critical_files(
                     critical_fragile, repo_path, per_file_languages, standards_path
                 )
+
+                # Debt narrative — plain paragraph; estimate is now computed deterministically
+                debt_narrative = ""
+                try:
+                    ds = debt_scores
+                    label = "high" if ds["total"] >= 60 else ("moderate" if ds["total"] >= 30 else "low")
+                    debt_prompt = (
+                        f"Technical debt score: {ds['total']}/100 ({label})\n\n"
+                        f"Component breakdown:\n"
+                        f"  - Knowledge concentration: {ds['bus_score']}/100 "
+                        f"({ds['top_contributor_name']} holds {ds['top_contributor_share']}% of all commits; "
+                        f"{ds['bf_file_count']} of {ds['total_files']} files have a single contributor)\n"
+                        f"  - Test coverage gaps: {ds['test_score']}/100 "
+                        f"({'estimated' if ds.get('coverage_estimated') else 'measured'} coverage: {ds['coverage_pct']:.1f}%)\n"
+                        f"  - Code churn: {ds['churn_score']}/100 "
+                        f"({ds['hot_file_count']} of {ds['total_files']} files are hot spots — "
+                        f"touched more than 2× the median file ({ds['median_commits']} commits); "
+                        f"{ds['hot_file_ratio_pct']}% of source files are disproportionately unstable)\n"
+                        f"  - Orphaned / dead code: {ds['orphan_score']}/100 "
+                        f"({ds['orphaned_files']} orphaned file(s) out of {ds['total_files']})\n"
+                        f"  - Hub fragility: {ds['hub_score']}/100 "
+                        f"(max in-degree: {ds['max_in_degree']})\n"
+                        f"  - Documentation density: {ds['doc_score']}/100 "
+                        f"({ds['doc_density_pct']}% of code lines are comments/docstrings)\n\n"
+                        f"Write a single plain-English paragraph (3-5 sentences) explaining what is "
+                        f"driving this score and what it means for future engineering effort. "
+                        f"Name specific contributors or files where relevant. Do not include a time estimate — "
+                        f"that is provided separately. Do not use bullet points or markdown."
+                    )
+                    narrative_resp = client.chat([
+                        {"role": "system", "content": (
+                            "You are a senior technical due diligence analyst writing for an M&A report. "
+                            "Be direct, precise, and jargon-free. Output only the paragraph — no headings, no markdown."
+                        )},
+                        {"role": "user", "content": debt_prompt},
+                    ], max_tokens=300)
+                    debt_narrative = narrative_resp["choices"][0]["message"]["content"].strip()
+                except Exception as e:
+                    print(f"Warning: Groq debt narrative failed: {e}", file=sys.stderr)
 
                 llm_analysis = {
                     "model": model,
                     "authorship": authorship_results,
                     "provenance": provenance_results,
                     "quality": quality_results,
+                    "debt_narrative": debt_narrative,
                 }
-            except Exception as e:
-                llm_analysis = {"error": str(e)}
+        except Exception as exc:
+            print(f"Warning: Groq LLM analysis failed: {exc}", file=sys.stderr)
+            llm_analysis = {"error": str(exc)}
 
     return {
         "repo_path": os.path.abspath(repo_path),
@@ -188,7 +513,7 @@ def _run_pipeline(
             "services": subscription_services["services"],
             "by_category": subscription_services["by_category"],
         },
-        "llm_summaries": llm_summaries,
+        "debt_scores": debt_scores,
         "llm_analysis": llm_analysis,
         "contributor_file_graph": graph_image_path,
     }
