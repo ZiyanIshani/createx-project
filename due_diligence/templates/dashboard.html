@@ -45,7 +45,7 @@
         <h1 class="text-2xl font-bold text-white">{{ repo_name }}</h1>
         <p class="text-sm text-gray-500 mt-1 font-mono">{{ data.repo_path }}</p>
       </div>
-      <div class="flex items-center gap-4">
+      <div class="flex items-center gap-3">
         {% set score = data.architectural_risk.score %}
         <div class="card px-6 py-4 text-center min-w-[120px]" title="Aggregate 0–10 score based on circular dependencies, fragile hub concentration, and orphaned file ratio. Lower is better.">
           <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Arch Risk</div>
@@ -59,6 +59,9 @@
         </div>
         <a href="/refresh" class="text-xs px-4 py-2 rounded-lg border border-indigo-500 text-indigo-400 hover:bg-indigo-500 hover:text-white transition-colors">
           Re-run
+        </a>
+        <a href="/" class="text-xs px-4 py-2 rounded-lg border border-[#2d3148] text-gray-500 hover:border-gray-500 hover:text-gray-300 transition-colors">
+          ← Repos
         </a>
       </div>
     </div>
@@ -106,13 +109,108 @@
         <div class="metric-label">Test files</div>
         <div class="metric-desc">Ratio: {{ tc.test_to_source_ratio }} test:source</div>
       </div>
-      <div class="card p-5" title="Percentage of source files directly imported by at least one test file.">
+      <div class="card p-5" title="{% if tc.coverage_estimated %}Estimated from test-to-source file ratio (import graph traversal returned 0 — common for Go and similar languages where tests share the same package).{% else %}Percentage of source files directly imported by at least one test file.{% endif %}">
         <div class="metric-value {% if tc.coverage_percent >= 50 %}text-green-400{% elif tc.coverage_percent >= 20 %}text-yellow-400{% else %}text-red-400{% endif %}">
-          {{ tc.coverage_percent }}%
+          {% if tc.coverage_estimated %}~{% endif %}{{ tc.coverage_percent }}%
         </div>
         <div class="metric-label">Test coverage est.</div>
-        <div class="metric-desc">Source files imported by tests</div>
+        <div class="metric-desc">{% if tc.coverage_estimated %}Based on test/source file ratio{% else %}Source files imported by tests{% endif %}</div>
       </div>
+    </div>
+
+    <!-- Technical Debt Score -->
+    {% set ds = data.debt_scores %}
+    {% set bus_score    = ds.bus_score %}
+    {% set test_score   = ds.test_score %}
+    {% set churn_score  = ds.churn_score %}
+    {% set orphan_score = ds.orphan_score %}
+    {% set hub_score    = ds.hub_score %}
+    {% set doc_score    = ds.doc_score %}
+    {% set debt_score   = ds.total %}
+
+    <div class="card p-6 mb-6">
+      <div class="flex items-start justify-between gap-6 flex-wrap">
+        <div class="flex-1 min-w-[260px]">
+          <div class="section-title" style="margin-bottom:0.3rem;">Technical Debt Score</div>
+          <p class="section-desc" style="margin-bottom:1rem;">
+            An estimated measure of the implied future cost of reworking this codebase, based on six structural signals. Scores run 0 (clean) to 100 (high debt). Weights reflect impact on engineering velocity:
+            knowledge concentration (25%), test gaps (25%), code churn (20%), orphaned code (15%), hub fragility (10%), documentation density (5%).
+          </p>
+          <!-- Breakdown bars -->
+          <div class="space-y-2.5">
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="text-gray-400">Knowledge concentration <span class="text-gray-600">(contributor dominance + file ownership)</span></span>
+                <span class="{% if bus_score >= 60 %}text-red-400{% elif bus_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %} font-semibold">{{ bus_score }}</span>
+              </div>
+              <div class="hub-bar"><div class="hub-bar-fill" style="width:{{ bus_score }}%;background:{% if bus_score >= 60 %}#ef4444{% elif bus_score >= 30 %}#eab308{% else %}#22c55e{% endif %};"></div></div>
+            </div>
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="text-gray-400">Test coverage gaps</span>
+                <span class="{% if test_score >= 60 %}text-red-400{% elif test_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %} font-semibold">{{ test_score }}</span>
+              </div>
+              <div class="hub-bar"><div class="hub-bar-fill" style="width:{{ test_score }}%;background:{% if test_score >= 60 %}#ef4444{% elif test_score >= 30 %}#eab308{% else %}#22c55e{% endif %};"></div></div>
+            </div>
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="text-gray-400">Code churn <span class="text-gray-600">({{ ds.hot_file_count }} file{% if ds.hot_file_count != 1 %}s{% endif %} with 2x+ median commit frequency)</span></span>
+                <span class="{% if churn_score >= 60 %}text-red-400{% elif churn_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %} font-semibold">{{ churn_score }}</span>
+              </div>
+              <div class="hub-bar"><div class="hub-bar-fill" style="width:{{ churn_score }}%;background:{% if churn_score >= 60 %}#ef4444{% elif churn_score >= 30 %}#eab308{% else %}#22c55e{% endif %};"></div></div>
+            </div>
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="text-gray-400">Orphaned / dead code</span>
+                <span class="{% if orphan_score >= 60 %}text-red-400{% elif orphan_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %} font-semibold">{{ orphan_score }}</span>
+              </div>
+              <div class="hub-bar"><div class="hub-bar-fill" style="width:{{ orphan_score }}%;background:{% if orphan_score >= 60 %}#ef4444{% elif orphan_score >= 30 %}#eab308{% else %}#22c55e{% endif %};"></div></div>
+            </div>
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="text-gray-400">Hub fragility</span>
+                <span class="{% if hub_score >= 60 %}text-red-400{% elif hub_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %} font-semibold">{{ hub_score }}</span>
+              </div>
+              <div class="hub-bar"><div class="hub-bar-fill" style="width:{{ hub_score }}%;background:{% if hub_score >= 60 %}#ef4444{% elif hub_score >= 30 %}#eab308{% else %}#22c55e{% endif %};"></div></div>
+            </div>
+            <div>
+              <div class="flex justify-between text-xs mb-1">
+                <span class="text-gray-400">Documentation density <span class="text-gray-600">({{ ds.doc_density_pct }}% of lines documented)</span></span>
+                <span class="{% if doc_score >= 60 %}text-red-400{% elif doc_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %} font-semibold">{{ doc_score }}</span>
+              </div>
+              <div class="hub-bar"><div class="hub-bar-fill" style="width:{{ doc_score }}%;background:{% if doc_score >= 60 %}#ef4444{% elif doc_score >= 30 %}#eab308{% else %}#22c55e{% endif %};"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Score cards -->
+        <div class="flex flex-col gap-3 shrink-0">
+          <!-- Debt Score -->
+          <div class="card px-8 py-6 text-center" style="min-width:140px; background:#0f1117;">
+            <div class="text-xs text-gray-500 uppercase tracking-widest mb-2">Debt Score</div>
+            <div class="font-bold leading-none mb-2 {% if debt_score >= 60 %}text-red-400{% elif debt_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %}" style="font-size:3rem;">
+              {{ debt_score }}
+            </div>
+            <div class="text-xs text-gray-600">out of 100</div>
+            <div class="mt-3 text-xs font-semibold px-3 py-1 rounded-full {% if debt_score >= 60 %}bg-red-900/40 text-red-400 border border-red-700/40{% elif debt_score >= 30 %}bg-yellow-900/40 text-yellow-400 border border-yellow-700/40{% else %}bg-green-900/40 text-green-400 border border-green-700/40{% endif %}">
+              {% if debt_score >= 60 %}High debt{% elif debt_score >= 30 %}Moderate{% else %}Low debt{% endif %}
+            </div>
+          </div>
+          <!-- Estimated Remediation (always shown, formula-based) -->
+          <div class="card px-8 py-6 text-center" style="min-width:140px; background:#0f1117;" title="Estimated time for a 2-engineer team devoting 20% of sprint capacity to debt reduction. Scales with debt score (non-linearly) and codebase size.">
+            <div class="text-xs text-gray-500 uppercase tracking-widest mb-2">Est. Remediation</div>
+            <div class="font-bold text-white leading-tight" style="font-size:1.4rem;">{{ data.debt_scores.remediation_estimate }}</div>
+            <div class="mt-3 text-xs text-gray-600 leading-relaxed">2 engineers, 20% capacity</div>
+          </div>
+        </div>
+      </div>
+
+      {% if llm_analysis and llm_analysis.debt_narrative %}
+      <div class="mt-5 pt-4 border-t border-[#2d3148]">
+        <div class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-2">AI Analysis</div>
+        <p class="text-sm text-gray-300 leading-relaxed">{{ llm_analysis.debt_narrative }}</p>
+      </div>
+      {% endif %}
     </div>
 
     <!-- Commit Velocity -->
@@ -429,10 +527,7 @@
       {% endif %}
     </div>
 
-    <!-- LLM Analysis -->
-    {% if llm_analysis and llm_analysis.get is not defined %}
-    {# fallback for dict access in jinja #}
-    {% endif %}
+    <!-- LLM Analysis (Groq agents — only shown when llm_analysis data is present) -->
     {% if llm_analysis %}
       {% if "error" in llm_analysis %}
       <div class="card p-4 mb-6" style="border-color:#854d0e;background:#1c1400;">
@@ -446,30 +541,38 @@
         <div class="mb-6">
           <div class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-2">Authorship Risk</div>
           <table>
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Contributors</th>
-                <th>Risk Level</th>
-                <th>Summary</th>
-              </tr>
-            </thead>
+            <thead><tr><th>File</th><th>Contributors</th><th>Risk Level</th><th>Summary</th></tr></thead>
             <tbody>
               {% for entry in llm_analysis.authorship %}
               <tr>
                 <td class="font-mono text-xs text-indigo-300">{{ entry.file | default("—") }}</td>
-                <td class="tabular-nums text-gray-400">{{ entry.contributors | default("—") }}</td>
-                <td>
-                  {% set rl = entry.risk_level | default("unknown") | lower %}
-                  {% if rl == "high" %}
-                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#450a0a;color:#f87171;border:1px solid #991b1b;">high</span>
-                  {% elif rl == "medium" %}
-                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#422006;color:#fbbf24;border:1px solid #92400e;">medium</span>
-                  {% elif rl == "low" %}
-                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#052e16;color:#4ade80;border:1px solid #166534;">low</span>
+                <td class="text-xs text-gray-400">
+                  {% set contribs = entry.contributors if entry.contributors else [] %}
+                  {% if contribs | length == 0 %}
+                    —
+                  {% elif contribs | length == 1 %}
+                    <span class="font-mono">{{ contribs[0].email }}</span>
+                    <span class="ml-1 {% if contribs[0].recency_label == 'active' %}text-green-400{% elif contribs[0].recency_label == 'semi-active' %}text-yellow-400{% else %}text-red-400{% endif %}">({{ contribs[0].recency_label | default("unknown") }})</span>
                   {% else %}
-                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#1c1c2e;color:#9ca3af;border:1px solid #374151;">{{ rl }}</span>
+                    <details>
+                      <summary class="text-indigo-400 cursor-pointer">{{ contribs | length }} contributors</summary>
+                      <ul class="mt-1 space-y-0.5">
+                        {% for c in contribs %}
+                        <li>
+                          <span class="font-mono">{{ c.email }}</span>
+                          <span class="ml-1 {% if c.recency_label == 'active' %}text-green-400{% elif c.recency_label == 'semi-active' %}text-yellow-400{% else %}text-red-400{% endif %}">({{ c.recency_label | default("unknown") }})</span>
+                        </li>
+                        {% endfor %}
+                      </ul>
+                    </details>
                   {% endif %}
+                </td>
+                <td>{% set rl = entry.risk_level | default("unknown") | lower %}
+                  {% if rl == "critical" %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#450a0a;color:#f87171;border:1px solid #991b1b;">critical</span>
+                  {% elif rl == "high" %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#450a0a;color:#f87171;border:1px solid #991b1b;">high</span>
+                  {% elif rl == "medium" %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#422006;color:#fbbf24;border:1px solid #92400e;">medium</span>
+                  {% elif rl == "low" %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#052e16;color:#4ade80;border:1px solid #166534;">low</span>
+                  {% else %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#1c1c2e;color:#9ca3af;border:1px solid #374151;">{{ rl }}</span>{% endif %}
                 </td>
                 <td class="text-gray-400 text-xs">{{ entry.risk_summary | default("—") }}</td>
               </tr>
@@ -483,39 +586,18 @@
         <div class="mb-6">
           <div class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-2">Provenance Risk</div>
           <table>
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Risk</th>
-                <th>Evidence</th>
-              </tr>
-            </thead>
+            <thead><tr><th>File</th><th>Risk</th><th>Evidence</th></tr></thead>
             <tbody>
               {% for entry in llm_analysis.provenance %}
               <tr>
                 <td class="font-mono text-xs text-indigo-300">{{ entry.file | default("—") }}</td>
-                <td>
-                  {% set pr = entry.provenance_risk | default("unknown") | lower %}
-                  {% if pr == "high" %}
-                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#450a0a;color:#f87171;border:1px solid #991b1b;">high</span>
-                  {% elif pr == "medium" %}
-                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#422006;color:#fbbf24;border:1px solid #92400e;">medium</span>
-                  {% elif pr == "low" %}
-                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#052e16;color:#4ade80;border:1px solid #166534;">low</span>
-                  {% else %}
-                  <span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#1c1c2e;color:#9ca3af;border:1px solid #374151;">{{ pr }}</span>
-                  {% endif %}
+                <td>{% set pr = entry.provenance_risk | default("unknown") | lower %}
+                  {% if pr == "high" %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#450a0a;color:#f87171;border:1px solid #991b1b;">high</span>
+                  {% elif pr == "medium" %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#422006;color:#fbbf24;border:1px solid #92400e;">medium</span>
+                  {% elif pr == "low" %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#052e16;color:#4ade80;border:1px solid #166534;">low</span>
+                  {% else %}<span class="text-xs px-2 py-0.5 rounded-full font-semibold" style="background:#1c1c2e;color:#9ca3af;border:1px solid #374151;">{{ pr }}</span>{% endif %}
                 </td>
-                <td class="text-gray-400 text-xs">
-                  {% if entry.evidence %}
-                  <details>
-                    <summary class="text-indigo-400 cursor-pointer">{{ entry.evidence | length }} item{{ "s" if entry.evidence | length != 1 }}</summary>
-                    <ul class="mt-1 list-disc list-inside">
-                      {% for ev in entry.evidence %}<li>{{ ev }}</li>{% endfor %}
-                    </ul>
-                  </details>
-                  {% else %}—{% endif %}
-                </td>
+                <td class="text-gray-400 text-xs">{% if entry.evidence %}<details><summary class="text-indigo-400 cursor-pointer">{{ entry.evidence | length }} item{{ "s" if entry.evidence | length != 1 }}</summary><ul class="mt-1 list-disc list-inside">{% for ev in entry.evidence %}<li>{{ ev }}</li>{% endfor %}</ul></details>{% else %}—{% endif %}</td>
               </tr>
               {% endfor %}
             </tbody>
@@ -527,95 +609,22 @@
         <div>
           <div class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-2">Code Quality</div>
           <table>
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Grade</th>
-                <th>Violations</th>
-                <th>Issues</th>
-              </tr>
-            </thead>
+            <thead><tr><th>File</th><th>Grade</th><th>Violations</th><th>Issues</th></tr></thead>
             <tbody>
               {% for entry in llm_analysis.quality %}
               <tr>
                 <td class="font-mono text-xs text-indigo-300">{{ entry.file | default("—") }}</td>
                 <td class="font-bold text-white">{{ entry.overall_grade | default("?") }}</td>
                 <td class="tabular-nums text-gray-400">{{ entry.violation_count | default(0) }}</td>
-                <td class="text-gray-400 text-xs">
-                  {% if entry.violations %}
-                  <details>
-                    <summary class="text-indigo-400 cursor-pointer">{{ entry.violations | length }} violation{{ "s" if entry.violations | length != 1 }}</summary>
-                    <ul class="mt-1 list-disc list-inside">
-                      {% for v in entry.violations %}<li>{{ v }}</li>{% endfor %}
-                    </ul>
-                  </details>
-                  {% else %}—{% endif %}
-                </td>
+                <td class="text-gray-400 text-xs">{% if entry.violations %}<details><summary class="text-indigo-400 cursor-pointer">{{ entry.violations | length }} violation{{ "s" if entry.violations | length != 1 }}</summary><ul class="mt-1 list-disc list-inside">{% for v in entry.violations %}<li>{{ v }}</li>{% endfor %}</ul></details>{% else %}—{% endif %}</td>
               </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
         {% endif %}
-
       </div>
       {% endif %}
-    {% endif %}
-
-    <!-- LLM Summaries (only if available) -->
-    {% if data.llm_summaries %}
-    <div class="card p-6 mb-6">
-      <div class="section-title">AI File Summaries</div>
-      <p class="section-desc">LLM-generated summaries for the most central internal files (highest in-degree). These are the files that would cause the most damage if modified incorrectly.</p>
-      <div class="space-y-4">
-        {% for s in data.llm_summaries %}
-        <details class="bg-[#141620] border border-[#2d3148] rounded-lg">
-          <summary class="p-4 flex justify-between items-center">
-            <span class="font-mono text-sm text-indigo-300">{{ s.file }}</span>
-            <div class="flex items-center gap-3">
-              {% if s._metrics %}
-              <span class="text-xs text-gray-500">in-degree: {{ s._metrics.in_degree }}</span>
-              {% endif %}
-              <span class="text-xs px-2 py-0.5 rounded-full
-                {% if s.confidence == 'high' %}bg-green-900/40 text-green-400 border border-green-700/40
-                {% elif s.confidence == 'medium' %}bg-yellow-900/40 text-yellow-400 border border-yellow-700/40
-                {% else %}bg-red-900/40 text-red-400 border border-red-700/40{% endif %}">
-                {{ s.confidence }} confidence
-              </span>
-            </div>
-          </summary>
-          <div class="px-4 pb-4 space-y-3">
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Role</div>
-              <p class="text-sm text-gray-300">{{ s.role }}</p>
-            </div>
-            {% if s.key_responsibilities %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Key Responsibilities</div>
-              <ul class="text-sm text-gray-400 list-disc list-inside">
-                {% for r in s.key_responsibilities %}<li>{{ r }}</li>{% endfor %}
-              </ul>
-            </div>
-            {% endif %}
-            {% if s.why_central %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Why Central</div>
-              <p class="text-sm text-gray-400">{{ s.why_central }}</p>
-            </div>
-            {% endif %}
-            {% if s.risk_notes %}
-            <div>
-              <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Risk Notes</div>
-              <ul class="text-sm text-orange-300/80 list-disc list-inside">
-                {% for r in s.risk_notes %}<li>{{ r }}</li>{% endfor %}
-              </ul>
-            </div>
-            {% endif %}
-          </div>
-        </details>
-        {% endfor %}
-      </div>
-    </div>
     {% endif %}
 
     <!-- Contributor ↔ File Graph (interactive) -->

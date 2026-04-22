@@ -102,7 +102,17 @@ def compute_test_coverage(repo_path: str, dep_graph=None) -> Dict[str, object]:
     source_set = set(source_files)
     tested_files = sorted(tested_set & source_set)
     untested_files = sorted(source_set - tested_set) if dep_graph is not None else []
-    coverage_pct = round(len(tested_files) / source_count * 100, 1) if source_count > 0 else 0.0
+    graph_coverage_pct = round(len(tested_files) / source_count * 100, 1) if source_count > 0 else 0.0
+
+    # For languages like Go where tests don't import internal files by path,
+    # graph traversal yields 0% even when real tests exist. Fall back to the
+    # test-to-source ratio as a proxy so the metric isn't misleadingly zero.
+    coverage_estimated = False
+    if graph_coverage_pct == 0.0 and test_count > 0 and source_count > 0:
+        coverage_pct = round(min(ratio * 100, 100.0), 1)
+        coverage_estimated = True
+    else:
+        coverage_pct = graph_coverage_pct
 
     return {
         "test_file_count": test_count,
@@ -112,4 +122,5 @@ def compute_test_coverage(repo_path: str, dep_graph=None) -> Dict[str, object]:
         "untested_files": untested_files[:20],
         "tested_files": tested_files,
         "coverage_percent": coverage_pct,
+        "coverage_estimated": coverage_estimated,
     }
