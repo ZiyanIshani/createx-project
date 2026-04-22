@@ -240,13 +240,8 @@ def _compute_debt_scores(
     # --- Code churn (hot files) ---
     # hot_file_ratio = fraction of source files that are >2× the median commit count.
     # Scale: 0% hot → 0, ≥33% hot → 100.
-    # A repo where a third of its files are constant change magnets is genuinely
-    # unstable; anything above that is capped at 100.
     hot_ratio = churn_data.get("hot_file_ratio", 0.0)
     churn_score = min(int(hot_ratio * 300), 100)
-
-    # --- Orphaned / dead code ---
-    orphan_score = min(int((len(metrics.get("orphaned_files", [])) / total_files) * 100 * 1.5), 100)
 
     # --- Hub fragility ---
     max_in_deg = metrics.get("max_in_degree", 0)
@@ -258,12 +253,11 @@ def _compute_debt_scores(
     doc_score = min(int(max(0.15 - doc_density, 0) / 0.15 * 100), 100)
 
     total = int(
-        bus_score    * 0.25 +
-        test_score   * 0.25 +
-        churn_score  * 0.20 +
-        orphan_score * 0.15 +
-        hub_score    * 0.10 +
-        doc_score    * 0.05
+        bus_score   * 0.30 +
+        test_score  * 0.25 +
+        churn_score * 0.25 +
+        hub_score   * 0.15 +
+        doc_score   * 0.05
     )
 
     top_name = top_contributors[0]["name"] if top_contributors else "unknown"
@@ -273,7 +267,6 @@ def _compute_debt_scores(
         "bus_score":            bus_score,
         "test_score":           test_score,
         "churn_score":          churn_score,
-        "orphan_score":         orphan_score,
         "hub_score":            hub_score,
         "doc_score":            doc_score,
         "total":                total,
@@ -286,7 +279,6 @@ def _compute_debt_scores(
         "hot_file_ratio_pct":    round(hot_ratio * 100, 1),
         "median_commits":        churn_data.get("median_commits", 0.0),
         "doc_density_pct":       round(doc_density * 100, 1),
-        "orphaned_files":        len(metrics.get("orphaned_files", [])),
         "max_in_degree":         max_in_deg,
         "total_files":           total_files,
         "top_contributor_share": round(top_share * 100, 1),
@@ -464,8 +456,6 @@ def _run_pipeline(
                         f"({ds['hot_file_count']} of {ds['total_files']} files are hot spots — "
                         f"touched more than 2× the median file ({ds['median_commits']} commits); "
                         f"{ds['hot_file_ratio_pct']}% of source files are disproportionately unstable)\n"
-                        f"  - Orphaned / dead code: {ds['orphan_score']}/100 "
-                        f"({ds['orphaned_files']} orphaned file(s) out of {ds['total_files']})\n"
                         f"  - Hub fragility: {ds['hub_score']}/100 "
                         f"(max in-degree: {ds['max_in_degree']})\n"
                         f"  - Documentation density: {ds['doc_score']}/100 "

@@ -100,6 +100,8 @@ _IMPORT_QUERIES: Dict[str, str] = {
     "rust": """
         (use_declaration
             argument: (_) @path)
+        (mod_item
+            name: (identifier) @path)
     """,
     "c": """
         (preproc_include

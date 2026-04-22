@@ -86,6 +86,19 @@ def resolve_import(
     if raw_import in all_files_set:
         return raw_import
 
+    # --- Rust `mod <name>;` resolution ---
+    # A bare identifier like "utils" from `mod utils;` maps to either:
+    #   <source_dir>/utils.rs   (inline sibling module)
+    #   <source_dir>/utils/mod.rs  (directory module)
+    if language == "Rust" and "/" not in raw_import and "." not in raw_import and "::" not in raw_import:
+        source_dir = posixpath.dirname(source_file)
+        for candidate in [
+            posixpath.join(source_dir, raw_import + ".rs"),
+            posixpath.join(source_dir, raw_import, "mod.rs"),
+        ]:
+            if candidate in all_files_set:
+                return candidate
+
     # Try matching by module stem (last component without extension)
     module_stem = raw_import.split(".")[-1] if "." in raw_import else raw_import
     # Also handle slashes (Go-style "github.com/foo/bar" → "bar")
@@ -181,10 +194,17 @@ def compute_metrics(graph: nx.DiGraph) -> Dict[str, object]:
         if len(scc) > 1
     ]
 
-    # Orphaned files: internal nodes with in_degree == 0 AND out_degree == 0
+    # Orphaned files: internal nodes with no internal connections.
+    # A file is orphaned only if nothing imports it AND it imports no other
+    # internal file.  Files that only import external packages (e.g. all Go
+    # files in a single-package repo, or C files that only #include stdlib
+    # headers) are NOT orphaned — they're actively used code; they just don't
+    # cross-reference each other inside the repo.
+    internal_nodes_set = set(internal_nodes)
     orphaned_files = [
         n for n in internal_nodes
-        if graph.in_degree(n) == 0 and graph.out_degree(n) == 0
+        if graph.in_degree(n) == 0
+        and not any(dest in internal_nodes_set for dest in graph.successors(n))
     ]
 
     # Top external deps by import count (in-degree in the full graph)
@@ -220,7 +240,6 @@ def architectural_risk_score(metrics: Dict[str, object]) -> Dict[str, object]:
     node_count: int = metrics.get("internal_file_count", 0)  # type: ignore
     sccs: List = metrics.get("circular_dependency_groups", [])  # type: ignore
     max_in: int = metrics.get("max_in_degree", 0)  # type: ignore
-    orphaned: List = metrics.get("orphaned_files", [])  # type: ignore
 
     # --- Circular dependencies ---
     scc_count = len(sccs)
@@ -251,25 +270,6 @@ def architectural_risk_score(metrics: Dict[str, object]) -> Dict[str, object]:
             score += 1
             reasons.append(
                 f"Max in-degree ({max_in}) is {ratio:.0%} of internal file count."
-            )
-
-    # --- Orphaned files ---
-    if node_count > 0:
-        orphan_ratio = len(orphaned) / node_count
-        if orphan_ratio > 0.5:
-            score += 3
-            reasons.append(
-                f"{len(orphaned)} orphaned files ({orphan_ratio:.0%} of codebase) — likely dead code or broken imports."
-            )
-        elif orphan_ratio > 0.25:
-            score += 2
-            reasons.append(
-                f"{len(orphaned)} orphaned files ({orphan_ratio:.0%} of codebase)."
-            )
-        elif orphan_ratio > 0.1:
-            score += 1
-            reasons.append(
-                f"{len(orphaned)} orphaned files ({orphan_ratio:.0%} of codebase)."
             )
 
     score = min(score, 10)

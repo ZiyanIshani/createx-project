@@ -47,7 +47,7 @@
       </div>
       <div class="flex items-center gap-3">
         {% set score = data.architectural_risk.score %}
-        <div class="card px-6 py-4 text-center min-w-[120px]" title="Aggregate 0–10 score based on circular dependencies, fragile hub concentration, and orphaned file ratio. Lower is better.">
+        <div class="card px-6 py-4 text-center min-w-[120px]" title="Aggregate 0–10 score based on circular dependencies and fragile hub concentration. Lower is better.">
           <div class="text-xs text-gray-500 uppercase tracking-widest mb-1">Arch Risk</div>
           <div class="metric-value {% if score <= 3 %}score-low{% elif score <= 6 %}score-mid{% else %}score-high{% endif %}">
             {{ score }}<span class="text-lg text-gray-500">/10</span>
@@ -97,13 +97,6 @@
         <div class="metric-label">Circular dep groups</div>
         <div class="metric-desc">Import loops between files</div>
       </div>
-      <div class="card p-5" title="Files never imported by anything else. May be dead code, standalone scripts, or files with broken import paths.">
-        <div class="metric-value {% if m.orphaned_files|length > 5 %}text-yellow-400{% else %}text-gray-300{% endif %}">
-          {{ m.orphaned_files|length }}
-        </div>
-        <div class="metric-label">Orphaned files</div>
-        <div class="metric-desc">Not imported by anything</div>
-      </div>
       <div class="card p-5" title="Number of test files detected via naming conventions (test_*, *_test, *.spec, etc).">
         <div class="metric-value text-cyan-400">{{ tc.test_file_count }}</div>
         <div class="metric-label">Test files</div>
@@ -120,13 +113,12 @@
 
     <!-- Technical Debt Score -->
     {% set ds = data.debt_scores %}
-    {% set bus_score    = ds.bus_score %}
-    {% set test_score   = ds.test_score %}
-    {% set churn_score  = ds.churn_score %}
-    {% set orphan_score = ds.orphan_score %}
-    {% set hub_score    = ds.hub_score %}
-    {% set doc_score    = ds.doc_score %}
-    {% set debt_score   = ds.total %}
+    {% set bus_score   = ds.bus_score %}
+    {% set test_score  = ds.test_score %}
+    {% set churn_score = ds.churn_score %}
+    {% set hub_score   = ds.hub_score %}
+    {% set doc_score   = ds.doc_score %}
+    {% set debt_score  = ds.total %}
 
     <div class="card p-6 mb-6">
       <div class="flex items-start justify-between gap-6 flex-wrap">
@@ -134,7 +126,7 @@
           <div class="section-title" style="margin-bottom:0.3rem;">Technical Debt Score</div>
           <p class="section-desc" style="margin-bottom:1rem;">
             An estimated measure of the implied future cost of reworking this codebase, based on six structural signals. Scores run 0 (clean) to 100 (high debt). Weights reflect impact on engineering velocity:
-            knowledge concentration (25%), test gaps (25%), code churn (20%), orphaned code (15%), hub fragility (10%), documentation density (5%).
+            knowledge concentration (30%), test gaps (25%), code churn (25%), hub fragility (15%), documentation density (5%).
           </p>
           <!-- Breakdown bars -->
           <div class="space-y-2.5">
@@ -158,13 +150,6 @@
                 <span class="{% if churn_score >= 60 %}text-red-400{% elif churn_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %} font-semibold">{{ churn_score }}</span>
               </div>
               <div class="hub-bar"><div class="hub-bar-fill" style="width:{{ churn_score }}%;background:{% if churn_score >= 60 %}#ef4444{% elif churn_score >= 30 %}#eab308{% else %}#22c55e{% endif %};"></div></div>
-            </div>
-            <div>
-              <div class="flex justify-between text-xs mb-1">
-                <span class="text-gray-400">Orphaned / dead code</span>
-                <span class="{% if orphan_score >= 60 %}text-red-400{% elif orphan_score >= 30 %}text-yellow-400{% else %}text-green-400{% endif %} font-semibold">{{ orphan_score }}</span>
-              </div>
-              <div class="hub-bar"><div class="hub-bar-fill" style="width:{{ orphan_score }}%;background:{% if orphan_score >= 60 %}#ef4444{% elif orphan_score >= 30 %}#eab308{% else %}#22c55e{% endif %};"></div></div>
             </div>
             <div>
               <div class="flex justify-between text-xs mb-1">
