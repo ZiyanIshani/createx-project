@@ -240,7 +240,6 @@ def architectural_risk_score(metrics: Dict[str, object]) -> Dict[str, object]:
     node_count: int = metrics.get("internal_file_count", 0)  # type: ignore
     sccs: List = metrics.get("circular_dependency_groups", [])  # type: ignore
     max_in: int = metrics.get("max_in_degree", 0)  # type: ignore
-    orphaned: List = metrics.get("orphaned_files", [])  # type: ignore
 
     # --- Circular dependencies ---
     scc_count = len(sccs)
@@ -271,25 +270,6 @@ def architectural_risk_score(metrics: Dict[str, object]) -> Dict[str, object]:
             score += 1
             reasons.append(
                 f"Max in-degree ({max_in}) is {ratio:.0%} of internal file count."
-            )
-
-    # --- Orphaned files ---
-    if node_count > 0:
-        orphan_ratio = len(orphaned) / node_count
-        if orphan_ratio > 0.5:
-            score += 3
-            reasons.append(
-                f"{len(orphaned)} orphaned files ({orphan_ratio:.0%} of codebase) — likely dead code or broken imports."
-            )
-        elif orphan_ratio > 0.25:
-            score += 2
-            reasons.append(
-                f"{len(orphaned)} orphaned files ({orphan_ratio:.0%} of codebase)."
-            )
-        elif orphan_ratio > 0.1:
-            score += 1
-            reasons.append(
-                f"{len(orphaned)} orphaned files ({orphan_ratio:.0%} of codebase)."
             )
 
     score = min(score, 10)
