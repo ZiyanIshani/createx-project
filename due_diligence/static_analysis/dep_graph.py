@@ -181,10 +181,17 @@ def compute_metrics(graph: nx.DiGraph) -> Dict[str, object]:
         if len(scc) > 1
     ]
 
-    # Orphaned files: internal nodes with in_degree == 0 AND out_degree == 0
+    # Orphaned files: internal nodes with no internal connections.
+    # A file is orphaned only if nothing imports it AND it imports no other
+    # internal file.  Files that only import external packages (e.g. all Go
+    # files in a single-package repo, or C files that only #include stdlib
+    # headers) are NOT orphaned — they're actively used code; they just don't
+    # cross-reference each other inside the repo.
+    internal_nodes_set = set(internal_nodes)
     orphaned_files = [
         n for n in internal_nodes
-        if graph.in_degree(n) == 0 and graph.out_degree(n) == 0
+        if graph.in_degree(n) == 0
+        and not any(dest in internal_nodes_set for dest in graph.successors(n))
     ]
 
     # Top external deps by import count (in-degree in the full graph)
