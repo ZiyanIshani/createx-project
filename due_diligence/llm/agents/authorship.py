@@ -95,6 +95,10 @@ Risk level rules:
         else:
             result = {"risk_level": "unknown", "risk_summary": "No response.", "parse_error": True}
 
+        # Unwrap ReAct finish envelope: {"tool": "finish", "answer": {...}}
+        if result.get("tool") == "finish" and "answer" in result:
+            result = result["answer"]
+
         # Ensure required fields are present
         contributors = result.get("contributors") or [
             {
