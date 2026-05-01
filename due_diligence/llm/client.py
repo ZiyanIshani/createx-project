@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 import time
 import requests
-import sys
 
 
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
@@ -24,15 +23,28 @@ class GroqConnectionError(Exception):
 
 
 class GroqClient:
+    """
+    Lightweight HTTP client for the Groq chat completions API.
+
+    Uses raw requests rather than the openai SDK to avoid extra dependencies.
+    The API is OpenAI-compatible — same endpoint format, same request/response shape.
+    """
+
     def __init__(
         self,
         api_key: str | None = None,
         model: str = DEFAULT_MODEL,
     ):
+        """
+        Args:
+            api_key: Groq API key. Falls back to the GROQ_API_KEY environment variable.
+            model: Model identifier to use for all requests. Default: llama-3.1-8b-instant.
+        """
         self.api_key = api_key or os.environ.get("GROQ_API_KEY", PLACEHOLDER_KEY)
         self.model = model
 
     def _headers(self) -> dict:
+        """Return the Authorization and Content-Type headers for every request."""
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -90,6 +102,17 @@ class GroqClient:
         )
 
     def is_available(self) -> bool:
+        """
+        Return True if the Groq API is reachable and the API key is valid.
+
+        A 429 (rate limited) response is treated as available because the key
+        is authenticated — the caller should still proceed and let the retry
+        logic in chat() handle the backoff.
+
+        Returns:
+            True if the API responds with 200 or 429, False on any other status
+            or network error.
+        """
         try:
             response = requests.post(
                 f"{GROQ_API_BASE}/chat/completions",
@@ -101,8 +124,6 @@ class GroqClient:
                 },
                 timeout=10,
             )
-            print(f"DEBUG Groq status={response.status_code} body={response.text[:300]}", file=sys.stderr)
             return response.status_code in (200, 429)
-        except Exception as e:
-            print(f"DEBUG Groq exception={e}", file=sys.stderr)
+        except Exception:
             return False

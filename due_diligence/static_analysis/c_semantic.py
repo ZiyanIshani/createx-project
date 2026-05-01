@@ -17,6 +17,8 @@ from .ast_parser import _get_ts_parser, _read_file_bytes, _node_text
 
 @dataclass
 class CFunctionInfo:
+    """Metadata for a single C function declaration."""
+
     name: str
     is_static: bool
     returns_pointer: bool
@@ -24,11 +26,22 @@ class CFunctionInfo:
 
 @dataclass
 class CSemanticSummary:
+    """
+    Semantic summary for a single C source file.
+
+    Attributes:
+        file_path: Absolute path to the analyzed file.
+        functions: List of CFunctionInfo for each function defined in the file.
+        dangerous_calls: Sorted list of dangerous libc function names called
+                         (e.g. 'gets', 'strcpy') — deduplicated.
+    """
+
     file_path: str
     functions: List[CFunctionInfo]
     dangerous_calls: List[str]
 
     def to_dict(self) -> Dict[str, object]:
+        """Return a JSON-serializable dict representation."""
         return {
             "file_path": self.file_path,
             "functions": [asdict(f) for f in self.functions],

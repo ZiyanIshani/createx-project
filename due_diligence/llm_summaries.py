@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
+"""
+llm_summaries.py — experimental local-LLM summary generator.
 
+Alternative to the Groq-based pipeline that targets locally hosted models
+(e.g. Ollama with Gemma or LLaMA). Useful for fully air-gapped environments
+where the Groq API is not accessible.
+
+Unlike main.py, this script calls the local Ollama HTTP API directly and does
+not use the ReAct agent loop. It is not integrated into the main CLI or web
+dashboard and is intended as a standalone tool or starting point for local
+LLM integration.
+
+Default model: gemma3:1b (configurable via --model)
+Default Ollama endpoint: http://localhost:11434/api/generate
+
+Usage:
+    python llm_summaries.py <repo_path> [--model NAME] [--output json|pretty]
+"""
 from __future__ import annotations
 import argparse
 import json
