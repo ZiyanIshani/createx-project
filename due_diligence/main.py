@@ -2,8 +2,20 @@
 """
 main.py — CLI entrypoint for the AI-powered due diligence pipeline.
 
+Orchestrates the full analysis pipeline:
+  Step 1: Repository ingestion (contributor stats, bus factor, commit velocity)
+  Step 2: Static analysis (AST parsing, dependency graph, architectural risk)
+  Step 3: Technical debt scoring (knowledge concentration, churn, hub fragility, test gaps, doc density)
+  Step 4: Subscription service detection (heuristic SaaS/cloud reference scan)
+  Step 5: LLM agentic analysis — optional, requires GROQ_API_KEY
+           (authorship risk, provenance risk, code quality, debt narrative)
+
 Usage:
     python main.py <repo_path> [--ref HEAD] [--output json|pretty]
+                               [--llm] [--standards PATH] [--model NAME] [--top-n N]
+
+Environment variables:
+    GROQ_API_KEY — required when --llm is used
 """
 
 from __future__ import annotations
@@ -53,6 +65,7 @@ def _compute_code_churn(repo_path: str) -> dict:
     All of these are direct contributors to technical debt.
     """
     import statistics
+    import subprocess
     from repo_ingestion.file_tree import discover_files
 
     _skip_exts = {
@@ -294,6 +307,32 @@ def _run_pipeline(
     model: str = "llama-3.1-8b-instant",
     top_n: int = 3,
 ) -> dict:
+    """
+    Run the full due diligence pipeline against a git repository.
+
+    Args:
+        repo_path: Absolute or relative path to the local git repository.
+        ref: Git ref to analyze (branch name, tag, or commit SHA). Default: HEAD.
+        use_llm: If True, run the optional LLM agentic stage via Groq API.
+                 Requires the GROQ_API_KEY environment variable to be set.
+        standards_path: Path to a coding standards file (markdown or plain text).
+                        If None, the built-in default standards are used.
+        model: Groq model name. Default: llama-3.1-8b-instant.
+        top_n: Number of critical files to send to LLM agents. Default: 3.
+
+    Returns:
+        A dict containing all pipeline outputs. Keys:
+          repo_path, languages, contributors, bus_factor_risk, commit_velocity,
+          contributor_timeline, bus_data, dep_graph_metrics, architectural_risk,
+          test_coverage, subscription_services, debt_scores, llm_analysis,
+          contributor_file_graph.
+
+    Notes:
+        - Subscription detection and debt scoring always run regardless of use_llm.
+        - The contributor ↔ file graph PNG is saved to <repo_path>/images/ on disk.
+        - All stages degrade gracefully on errors; partial results are returned
+          with a warning printed to stderr rather than raising.
+    """
     # --- Step 1: Repository Ingestion ---
     languages = language_breakdown(repo_path)
 
@@ -510,6 +549,17 @@ def _run_pipeline(
 
 
 def _print_pretty(result: dict) -> None:
+    """
+    Print a human-readable due diligence report to stdout.
+
+    Formats the pipeline result dict produced by _run_pipeline into labelled
+    sections: language breakdown, top contributors, commit velocity, bus factor
+    risk, test coverage, dependency graph metrics, architectural risk, subscription
+    services detected, and LLM analysis (if available).
+
+    Args:
+        result: Dict returned by _run_pipeline.
+    """
     sep = "-" * 60
 
     print(f"\n{'=' * 60}")
@@ -687,6 +737,7 @@ def _print_pretty(result: dict) -> None:
 
 
 def main() -> None:
+    """Parse CLI arguments and run the due diligence pipeline."""
     parser = argparse.ArgumentParser(
         description="AI-powered technical due diligence pipeline."
     )

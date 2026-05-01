@@ -45,6 +45,27 @@ class AgentLoopMixin:
         tools: dict,
         max_iterations: int = 10,
     ):
+        """
+        Run a ReAct (Reason → Act → Observe) agent loop against the Groq client.
+
+        The loop sends messages to the LLM, parses the JSON response, and either:
+          - Calls the requested tool and feeds the result back as a user message, or
+          - Returns the final answer when the LLM calls {"tool": "finish", "answer": ...}.
+
+        Args:
+            system_prompt: System prompt string to set agent context and tool schema.
+            initial_user_message: First user message describing the task.
+            tools: Dict of {tool_name: callable} available to the agent.
+                   Each callable receives keyword arguments from the LLM's "args" dict.
+                   The special "finish" tool is handled automatically and need not be
+                   included, but may be passed as a no-op (``lambda answer: answer``).
+            max_iterations: Maximum number of LLM round-trips before giving up.
+                            Default: 10.
+
+        Returns:
+            The value from the LLM's "finish" answer field (may be a dict, list, or str),
+            or the last cleaned message content if max_iterations is reached.
+        """
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": initial_user_message},
